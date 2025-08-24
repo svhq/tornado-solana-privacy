@@ -2,7 +2,11 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::system_instruction;
 
 pub mod merkle_tree;
+pub mod poseidon_hash;
+pub mod merkle_tree_poseidon;
+pub mod tests;
 use merkle_tree::*;
+use merkle_tree_poseidon::*;
 
 declare_id!("ToRNaDo1111111111111111111111111111111111111");
 
