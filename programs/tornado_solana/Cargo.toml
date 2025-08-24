@@ -19,6 +19,7 @@ default = []
 anchor-lang = "0.29.0"
 anchor-spl = "0.29.0"
 solana-program = "1.18.17"
-sha3 = "0.10"
-# Poseidon hash implementation for zero-knowledge privacy
-poseidon-rs = "0.0.10"
+# Light Protocol Poseidon for ZK-friendly hashing
+light-poseidon = "0.2.0"
+# Required for BN254 field elements
+ark-bn254 = "0.4.0"

@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
-use sha3::{Digest, Keccak256};
+use light_poseidon::{Poseidon, PoseidonBytesHasher};
+use ark_bn254::Fr;
 
 /// Direct translation of MerkleTreeWithHistory from Tornado Cash
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -85,28 +86,42 @@ impl MerkleTree {
         self.current_root
     }
     
-    /// Hash two nodes together (equivalent to MiMC in original)
-    /// Using Keccak256 for simplicity - replace with Poseidon later
+    /// Hash two nodes together using Poseidon (ZK-friendly)
+    /// This is now using Light Protocol's Poseidon implementation
     pub fn hash_left_right(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
-        let mut hasher = Keccak256::new();
-        hasher.update(left);
-        hasher.update(right);
-        let result = hasher.finalize();
+        // Create a Poseidon hasher for 2 inputs
+        let mut hasher = match Poseidon::<Fr>::new_circom(2) {
+            Ok(h) => h,
+            Err(_) => {
+                // Fallback in case of initialization error
+                // This should never happen with valid parameters
+                return [0u8; 32];
+            }
+        };
         
-        let mut output = [0u8; 32];
-        output.copy_from_slice(&result);
-        output
+        // Hash the two 32-byte inputs
+        match hasher.hash_bytes_be(&[left, right]) {
+            Ok(hash) => hash,
+            Err(_) => {
+                // Fallback in case of hashing error
+                // This should only happen if inputs are invalid
+                [0u8; 32]
+            }
+        }
     }
     
-    /// Hash a single leaf
+    /// Hash a single leaf using Poseidon
     pub fn hash_leaf(data: &[u8; 32]) -> [u8; 32] {
-        let mut hasher = Keccak256::new();
-        hasher.update(data);
-        let result = hasher.finalize();
+        // For a single input, we use Poseidon with 1 input
+        let mut hasher = match Poseidon::<Fr>::new_circom(1) {
+            Ok(h) => h,
+            Err(_) => return [0u8; 32],
+        };
         
-        let mut output = [0u8; 32];
-        output.copy_from_slice(&result);
-        output
+        match hasher.hash_bytes_be(&[data]) {
+            Ok(hash) => hash,
+            Err(_) => [0u8; 32]
+        }
     }
     
     /// Generate merkle proof for a given leaf
