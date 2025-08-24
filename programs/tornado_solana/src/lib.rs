@@ -5,6 +5,9 @@ use groth16_solana::groth16::Groth16Verifier;
 pub mod merkle_tree;
 use merkle_tree::*;
 
+#[cfg(test)]
+mod poseidon_test;
+
 declare_id!("ToRNaDo1111111111111111111111111111111111111");
 
 #[program]

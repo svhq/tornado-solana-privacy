@@ -5,9 +5,7 @@
  * This ensures the circuit and smart contract produce identical hashes
  */
 
-const circomlib = require('circomlib');
-const ff = require('ffjavascript');
-const { buildPoseidon } = circomlib.poseidon;
+const { buildPoseidon } = require('circomlibjs');
 
 console.log('🔬 Poseidon Consistency Test: JS vs Rust\n');
 console.log('This test verifies that Poseidon hashes match between:');

@@ -28,3 +28,6 @@ groth16-solana = "0.2.0"
 # For serialization of proof elements
 ark-serialize = "0.4"
 ark-ff = "0.4"
+
+[dev-dependencies]
+hex = "0.4"
