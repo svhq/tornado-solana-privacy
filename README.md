@@ -36,7 +36,7 @@ tornado_solana/
 2. **Merkle Tree Module**
    - 20-level binary tree
    - Efficient sparse storage using filled_subtrees
-   - Keccak256 hashing (to be replaced with Poseidon)
+   - Poseidon hashing (ZK-friendly, circuit-compatible)
 
 3. **Instructions**
    - `initialize(denomination)` - Deploy new pool
@@ -51,10 +51,11 @@ tornado_solana/
 - Deposit and withdrawal instructions
 - Nullifier and commitment tracking
 - Basic test suite
+- ✅ Poseidon hash integration (using Light Protocol's light-poseidon v0.2.0)
+- Comprehensive test coverage (40+ test cases)
 
 ⚠️ **TODO for Production**:
 - [ ] Integrate Light Protocol's groth16-solana for real proof verification
-- [ ] Replace Keccak256 with Light Protocol's Poseidon hash
 - [ ] Add circuit compilation and proving key generation
 - [ ] Implement relayer infrastructure
 - [ ] Add multiple denomination support
@@ -99,7 +100,7 @@ anchor deploy --provider.cluster devnet
 ## Security Notes
 
 - **Proof Verification**: Currently mocked for testing. Production requires real Groth16 verification
-- **Hash Function**: Using Keccak256 temporarily. Production should use Poseidon for circuit compatibility
+- **Hash Function**: ✅ Now using Poseidon (light-poseidon v0.2.0) for ZK-circuit compatibility
 - **Trusted Setup**: Production deployment requires a ceremony for proving/verifying keys
 - **Audit**: Code should be professionally audited before mainnet deployment
 
@@ -108,8 +109,8 @@ anchor deploy --provider.cluster devnet
 1. **Integrate Light Protocol Libraries**:
    ```toml
    [dependencies]
-   groth16-solana = "0.0.1"
-   light-poseidon = "1.0.0"
+   groth16-solana = "0.0.1"  # Still needed for proof verification
+   light-poseidon = "0.2.0"  # ✅ Already integrated
    ```
 
 2. **Add Circuit Implementation**:
