@@ -23,3 +23,8 @@ solana-program = "1.18.17"
 light-poseidon = "0.2.0"
 # Required for BN254 field elements
 ark-bn254 = "0.4.0"
+# Groth16 verifier using Solana's native syscalls (<200k CU)
+groth16-solana = "0.2.0"
+# For serialization of proof elements
+ark-serialize = "0.4"
+ark-ff = "0.4"
