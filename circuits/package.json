@@ -1,0 +1,21 @@
+{
+  "name": "tornado-solana-circuits",
+  "version": "1.0.0",
+  "description": "Zero-knowledge circuits for Tornado Cash on Solana",
+  "scripts": {
+    "compile": "node scripts/compile.js",
+    "setup": "node scripts/setup.js",
+    "generate-vk": "node scripts/generate_vk.js",
+    "test": "node scripts/test.js",
+    "build": "npm run compile && npm run setup && npm run generate-vk"
+  },
+  "dependencies": {
+    "circomlib": "^2.0.5",
+    "snarkjs": "^0.7.0",
+    "ffjavascript": "^0.2.60"
+  },
+  "devDependencies": {
+    "chai": "^4.3.10",
+    "mocha": "^10.2.0"
+  }
+}
