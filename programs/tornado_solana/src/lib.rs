@@ -428,4 +428,4 @@ pub const PLACEHOLDER_VERIFYING_KEY: Groth16Verifyingkey = Groth16Verifyingkey {
     vk_gamme_g2: [0u8; 128],
     vk_delta_g2: [0u8; 128],
     vk_ic: &[[0u8; 64]; 9], // 8 public inputs + 1
-};
+};// Force update: Mon, Aug 25, 2025  7:51:00 PM
