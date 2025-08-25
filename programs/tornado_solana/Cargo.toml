@@ -21,8 +21,9 @@ anchor-spl = "0.29.0"
 solana-program = "1.18.17"
 # Light Protocol Poseidon for ZK-friendly hashing
 light-poseidon = "0.2.0"
-# Required for BN254 field elements
+# Required for BN254 field elements and G1 point operations
 ark-bn254 = "0.4.0"
+ark-ec = "0.4.0"
 # Groth16 verifier using Solana's native syscalls (<200k CU)
 groth16-solana = "0.2.0"
 # For serialization of proof elements

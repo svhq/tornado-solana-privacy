@@ -1,6 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::system_instruction;
-use groth16_solana::groth16::Groth16Verifier;
+use groth16_solana::groth16::{Groth16Verifier, Groth16Verifyingkey};
+use ark_bn254::{G1Affine, G2Affine};
+use ark_ec::AffineRepr;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
 pub mod merkle_tree;
 use merkle_tree::*;
@@ -8,7 +11,7 @@ use merkle_tree::*;
 #[cfg(test)]
 mod poseidon_test;
 
-declare_id!("ToRNaDo1111111111111111111111111111111111111");
+declare_id!("11111111111111111111111111111112");
 
 #[program]
 pub mod tornado_solana {
@@ -68,8 +71,9 @@ pub mod tornado_solana {
         
         // Update root history
         let new_root = tornado_state.merkle_tree.get_root();
-        tornado_state.current_root_index = (tornado_state.current_root_index + 1) % ROOT_HISTORY_SIZE;
-        tornado_state.roots[tornado_state.current_root_index as usize] = new_root;
+        let new_index = (tornado_state.current_root_index + 1) % ROOT_HISTORY_SIZE;
+        tornado_state.current_root_index = new_index;
+        tornado_state.roots[new_index as usize] = new_root;
         
         emit!(DepositEvent {
             commitment,
@@ -110,11 +114,10 @@ pub mod tornado_solana {
         
         // Verify the zero-knowledge proof using Groth16
         // This uses Solana's native alt_bn128 syscalls for <200k CU verification
-        // Note: In production, the verifying key should be stored in GlobalState
+        // TODO: In production, deserialize the actual verifying key from tornado_state.verifying_key
         // For now, we'll use a placeholder - the actual VK comes from the trusted setup
-        let verifying_key = &tornado_state.verifying_key;
         require!(
-            verify_proof(&proof, &root, &nullifier_hash, &recipient, fee, verifying_key), 
+            verify_proof(&proof, &root, &nullifier_hash, &recipient, &relayer.unwrap_or(Pubkey::default()), fee, refund, &PLACEHOLDER_VERIFYING_KEY), 
             TornadoError::InvalidProof
         );
         
@@ -275,8 +278,10 @@ fn verify_proof(
     root: &[u8; 32],
     nullifier_hash: &[u8; 32],
     recipient: &Pubkey,
+    relayer: &Pubkey,
     fee: u64,
-    verifying_key: &[u8],
+    refund: u64,
+    verifying_key: &Groth16Verifyingkey,
 ) -> bool {
     // Proof should be 256 bytes (64 bytes for A, 128 for B, 64 for C)
     if proof.len() != 256 {
@@ -284,31 +289,25 @@ fn verify_proof(
     }
     
     // Parse proof components
-    let proof_a = &proof[0..64];
-    let proof_b = &proof[64..192];
-    let proof_c = &proof[192..256];
+    let proof_a_bytes = &proof[0..64];
+    let proof_b_bytes: [u8; 128] = proof[64..192].try_into().unwrap_or([0u8; 128]);
+    let proof_c_bytes: [u8; 64] = proof[192..256].try_into().unwrap_or([0u8; 64]);
     
-    // Prepare public inputs
-    // The circuit expects: root, nullifier_hash, recipient_hash, fee
-    let mut public_inputs = Vec::new();
-    public_inputs.push(root as &[u8]);
-    public_inputs.push(nullifier_hash as &[u8]);
+    // Negate proof A (required for circom/snarkjs compatibility)
+    let proof_a_negated = match negate_proof_a(proof_a_bytes) {
+        Ok(negated_bytes) => negated_bytes,
+        Err(_) => return false,
+    };
     
-    // Hash recipient to 32 bytes for circuit compatibility
-    let recipient_bytes = recipient.to_bytes();
-    let recipient_hash = merkle_tree::MerkleTree::hash_leaf(&recipient_bytes);
-    public_inputs.push(&recipient_hash);
+    // Prepare 8 public inputs as required by the circuit
+    let public_inputs = prepare_public_inputs(root, nullifier_hash, recipient, relayer, fee, refund);
     
-    // Convert fee to 32-byte big-endian representation
-    let mut fee_bytes = [0u8; 32];
-    fee_bytes[24..].copy_from_slice(&fee.to_be_bytes());
-    public_inputs.push(&fee_bytes);
-    
-    // Create and run verifier
+    // Create and run verifier with correct types
+    // Rust will infer Groth16Verifier::<8> from the array type
     match Groth16Verifier::new(
-        proof_a.try_into().unwrap_or(&[0u8; 64]),
-        proof_b.try_into().unwrap_or(&[0u8; 128]),
-        proof_c.try_into().unwrap_or(&[0u8; 64]),
+        &proof_a_negated,
+        &proof_b_bytes,
+        &proof_c_bytes,
         &public_inputs,
         verifying_key,
     ) {
@@ -318,3 +317,115 @@ fn verify_proof(
         Err(_) => false
     }
 }
+
+/// Negate proof A using ark-bn254 (required for circom/snarkjs compatibility)
+fn negate_proof_a(proof_a_bytes: &[u8]) -> Result<[u8; 64], &'static str> {
+    // Convert to little-endian for ark processing
+    let le_bytes = change_endianness(proof_a_bytes);
+    
+    // Deserialize as G1 point
+    let point = G1Affine::deserialize_compressed(&le_bytes[..])
+        .map_err(|_| "Failed to deserialize proof A")?;
+    
+    // Negate the point
+    let negated = -point;
+    
+    // Serialize back to bytes
+    let mut output = vec![0u8; 64];
+    negated.serialize_uncompressed(&mut output[..])
+        .map_err(|_| "Failed to serialize negated proof A")?;
+    
+    // Convert back to big-endian
+    let be_bytes = change_endianness(&output);
+    
+    be_bytes.try_into()
+        .map_err(|_| "Invalid proof A length")
+}
+
+/// Prepare the 8 public inputs for the circuit:
+/// root, nullifierHash, recipientHigh, recipientLow, relayerHigh, relayerLow, fee, refund
+fn prepare_public_inputs(
+    root: &[u8; 32],
+    nullifier_hash: &[u8; 32],
+    recipient: &Pubkey,
+    relayer: &Pubkey,
+    fee: u64,
+    refund: u64,
+) -> [[u8; 32]; 8] {
+    let mut inputs = [[0u8; 32]; 8];
+    
+    // Input 0: root
+    inputs[0] = *root;
+    
+    // Input 1: nullifierHash
+    inputs[1] = *nullifier_hash;
+    
+    // Inputs 2-3: recipient split into high/low parts
+    let (recipient_high, recipient_low) = split_address_to_high_low(recipient);
+    inputs[2] = recipient_high;
+    inputs[3] = recipient_low;
+    
+    // Inputs 4-5: relayer split into high/low parts
+    let (relayer_high, relayer_low) = split_address_to_high_low(relayer);
+    inputs[4] = relayer_high;
+    inputs[5] = relayer_low;
+    
+    // Input 6: fee as 32-byte big-endian
+    encode_u64_as_32_bytes(fee, &mut inputs[6]);
+    
+    // Input 7: refund as 32-byte big-endian
+    encode_u64_as_32_bytes(refund, &mut inputs[7]);
+    
+    inputs
+}
+
+/// Split a Solana address into high and low parts because they exceed BN254 field size
+/// Addresses are 32 bytes, we split as: high = [0; 16] + [first 16 bytes], low = [0; 16] + [last 16 bytes]
+fn split_address_to_high_low(address: &Pubkey) -> ([u8; 32], [u8; 32]) {
+    let address_bytes = address.to_bytes();
+    let mut high = [0u8; 32];
+    let mut low = [0u8; 32];
+    
+    // High part: pad with zeros then first 16 bytes
+    high[16..32].copy_from_slice(&address_bytes[0..16]);
+    
+    // Low part: pad with zeros then last 16 bytes
+    low[16..32].copy_from_slice(&address_bytes[16..32]);
+    
+    (high, low)
+}
+
+/// Encode a u64 as a 32-byte big-endian array
+fn encode_u64_as_32_bytes(value: u64, output: &mut [u8; 32]) {
+    output[24..32].copy_from_slice(&value.to_be_bytes());
+}
+
+/// Reconstruct a Solana address from high and low parts
+#[allow(dead_code)]
+fn reconstruct_address_from_high_low(high: &[u8; 32], low: &[u8; 32]) -> Pubkey {
+    let mut address_bytes = [0u8; 32];
+    address_bytes[0..16].copy_from_slice(&high[16..32]);
+    address_bytes[16..32].copy_from_slice(&low[16..32]);
+    Pubkey::from(address_bytes)
+}
+
+/// Change endianness of bytes (big-endian <-> little-endian)
+fn change_endianness(bytes: &[u8]) -> Vec<u8> {
+    let mut result = Vec::new();
+    for chunk in bytes.chunks(32) {
+        for byte in chunk.iter().rev() {
+            result.push(*byte);
+        }
+    }
+    result
+}
+
+// Placeholder verifying key - will be replaced with actual key from trusted setup
+pub const PLACEHOLDER_VERIFYING_KEY: Groth16Verifyingkey = Groth16Verifyingkey {
+    nr_pubinputs: 8,
+    vk_alpha_g1: [0u8; 64],
+    vk_beta_g2: [0u8; 128],
+    vk_gamme_g2: [0u8; 128],
+    vk_delta_g2: [0u8; 128],
+    vk_ic: &[[0u8; 64]; 9], // 8 public inputs + 1
+};
