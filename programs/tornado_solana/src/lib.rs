@@ -335,11 +335,13 @@ fn verify_proof(
         })?;
     
     // Negate proof A (required for circom/snarkjs compatibility)
+    msg!("About to negate proof A...");
     let proof_a_negated = negate_proof_a(proof_a_bytes)
         .map_err(|e| {
             msg!("Failed to negate proof A: {}", e);
             TornadoError::ProofNegationFailed
         })?;
+    msg!("Proof A negation succeeded!");
     
     // Prepare 8 public inputs as required by the circuit
     let public_inputs = prepare_public_inputs(root, nullifier_hash, recipient, relayer, fee, refund);
