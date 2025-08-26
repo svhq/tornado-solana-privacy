@@ -376,7 +376,7 @@ fn negate_proof_a(proof_a_bytes: &[u8]) -> Result<[u8; 64]> {
     let le_bytes_with_zero = [&change_endianness(proof_a_bytes)[..], &[0u8][..]].concat();
     
     // Deserialize as G1 point (65 bytes - uncompressed with infinity bit)
-    let point = G1Affine::deserialize_uncompressed(&le_bytes_with_zero)
+    let point = G1Affine::deserialize_uncompressed(&*le_bytes_with_zero)
         .map_err(|_| TornadoError::InvalidProofFormat)?;
     
     // Negate the point (required for circom compatibility)
