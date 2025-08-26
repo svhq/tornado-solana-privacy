@@ -288,10 +288,18 @@ fn verify_proof(
         return false;
     }
     
-    // Parse proof components
+    // Parse proof components with proper error handling
     let proof_a_bytes = &proof[0..64];
-    let proof_b_bytes: [u8; 128] = proof[64..192].try_into().unwrap_or([0u8; 128]);
-    let proof_c_bytes: [u8; 64] = proof[192..256].try_into().unwrap_or([0u8; 64]);
+    let proof_b_bytes: [u8; 128] = proof[64..192].try_into()
+        .map_err(|_| { 
+            msg!("Invalid proof B length");
+            false 
+        }).ok()?;
+    let proof_c_bytes: [u8; 64] = proof[192..256].try_into()
+        .map_err(|_| {
+            msg!("Invalid proof C length");
+            false
+        }).ok()?;
     
     // Negate proof A (required for circom/snarkjs compatibility)
     let proof_a_negated = match negate_proof_a(proof_a_bytes) {
@@ -323,8 +331,8 @@ fn negate_proof_a(proof_a_bytes: &[u8]) -> Result<[u8; 64], &'static str> {
     // Convert to little-endian for ark processing
     let le_bytes = change_endianness(proof_a_bytes);
     
-    // Deserialize as G1 point
-    let point = G1Affine::deserialize_compressed(&le_bytes[..])
+    // Deserialize as G1 point (uncompressed - 64 bytes from snarkjs)
+    let point = G1Affine::deserialize_uncompressed(&le_bytes[..])
         .map_err(|_| "Failed to deserialize proof A")?;
     
     // Negate the point
