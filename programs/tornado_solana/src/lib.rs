@@ -482,8 +482,3 @@ fn change_endianness(bytes: &[u8]) -> Vec<u8> {
     result
 }
 
-// Get the actual verifying key from our trusted setup
-// This replaces the placeholder with the real key from withdraw_fixed.circom
-pub fn get_circuit_verifying_key() -> &'static Groth16Verifyingkey<'static> {
-    verifying_key::get_circuit_verifying_key()
-}
