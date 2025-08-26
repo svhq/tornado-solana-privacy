@@ -51,6 +51,6 @@ pub const VERIFYINGKEY: Groth16Verifyingkey = Groth16Verifyingkey {
 };
 
 /// Get the verifying key for the withdraw circuit
-pub fn get_circuit_verifying_key() -> &'static Groth16Verifyingkey {
+pub fn get_circuit_verifying_key() -> &'static Groth16Verifyingkey<'static> {
     &VERIFYINGKEY
 }

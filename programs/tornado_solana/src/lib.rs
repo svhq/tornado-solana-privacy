@@ -8,7 +8,7 @@ pub mod merkle_tree;
 use merkle_tree::*;
 
 pub mod verifying_key;
-use verifying_key::get_withdraw_verifying_key;
+use verifying_key::get_circuit_verifying_key;
 
 #[cfg(test)]
 mod poseidon_test;
@@ -484,6 +484,6 @@ fn change_endianness(bytes: &[u8]) -> Vec<u8> {
 
 // Get the actual verifying key from our trusted setup
 // This replaces the placeholder with the real key from withdraw_fixed.circom
-pub fn get_circuit_verifying_key() -> Groth16Verifyingkey {
-    get_withdraw_verifying_key()
+pub fn get_circuit_verifying_key() -> &'static Groth16Verifyingkey<'static> {
+    verifying_key::get_circuit_verifying_key()
 }
