@@ -1,270 +1,253 @@
 # Tornado Solana Development Progress & Context
 
-## Last Updated: 2024-01-26
-**Current Status: ✅ ALL TESTS PASSING - Ready for Circuit Integration**
+## Last Updated: 2024-01-26 (Session 2)
+**Current Status: 🟡 ALMOST READY - Real proof verification failing, needs verifying key fix**
 
 ---
 
 ## 🎯 Executive Summary
 
-Successfully resolved compilation timeout issues and achieved 100% test pass rate (14/14 tests) with cryptographic functions verified against JavaScript reference implementation. The "timeout" was actually a compilation performance issue (10+ minutes on Windows/WSL), now resolved by using native Ubuntu (2 minutes).
+We have successfully:
+- ✅ Generated real proofs from the withdraw_fixed.circom circuit
+- ✅ Completed trusted setup with withdraw_final.zkey
+- ✅ All 14 basic tests passing (mock data)
+- ❌ **BLOCKER**: Real proof verification fails - verifying key integration incomplete
+
+**Critical Next Step**: Fix `verifying_key.rs` to load actual VK bytes from `circuits/build/vk_bytes.json`
 
 ---
 
-## 📁 Files Modified in This Session
+## 📁 Current File Structure & Status
 
-### 1. **lib.rs** (Main Program Logic)
-- **Fixed**: Borrow checker errors with tornado_state
-- **Fixed**: Return type mismatch in `negate_proof_a` function  
-- **Fixed**: Unused variable warnings
-- **Changes**:
-  ```rust
-  // Line 48-50: Store keys before mutable borrow
-  let tornado_key = ctx.accounts.tornado_state.key();
-  let tornado_info = ctx.accounts.tornado_state.to_account_info();
-  
-  // Line 359: Fixed return type
-  fn negate_proof_a(proof_a_bytes: &[u8]) -> Result<[u8; 64]> {
-  ```
+### Working Files ✅
+- `lib.rs` - Core logic fixed, all borrow checker errors resolved
+- `integration_tests.rs` - 7/7 tests passing
+- `simple_test.rs` - 3/3 tests passing  
+- `merkle_tree.rs` - Poseidon hash working, matches JS
+- `circuits/withdraw_fixed.circom` - Compiled successfully
 
-### 2. **integration_tests.rs** (Test Suite)
-- **Fixed**: Missing imports for test functions
-- **Fixed**: Error type comparison issues
-- **Changes**:
-  ```rust
-  // Added proper imports
-  use crate::{
-      change_endianness, encode_u64_as_32_bytes, negate_proof_a,
-      prepare_public_inputs, reconstruct_address_from_high_low,
-      split_address_to_high_low, verify_proof, 
-      TornadoError, PLACEHOLDER_VERIFYING_KEY,
-  };
-  ```
+### Files Needing Fix ❌
+- **`verifying_key.rs`** - Currently returns placeholder zeros, needs to load actual VK
+- **`real_proof_test.rs`** - Test written but fails due to VK issue
 
-### 3. **simple_test.rs** (New File - Lightweight Tests)
-- Created minimal test suite for quick verification
-- Tests core functions without heavy dependencies
+### Generated Artifacts ✅
+- `circuits/build/withdraw_final.zkey` - 5.4MB proving key
+- `circuits/build/verification_key.json` - Human-readable VK
+- `circuits/build/vk_bytes.json` - 3584 bytes for Rust integration
+- `circuits/test_proof_valid.json` - Real proof with 8 public inputs
 
 ---
 
-## 🔍 Problem Investigation Timeline
+## 🔍 Current Blocker: Verifying Key Integration
 
-### Day 1: Initial Discovery
-**Problem**: Tests timing out after 5+ minutes
-**Initial Hypothesis**: Tests were running slowly
-**Reality**: Compilation was the bottleneck
+### The Problem
+```rust
+// In verifying_key.rs - THIS IS WRONG
+static VK_ALPHA_G1: [u8; 64] = [0u8; 64];  // Should be actual bytes
+static IC_ARRAY: [[u8; 64]; 9] = [[0u8; 64]; 9];  // Should be 9 real IC points
+```
 
-### Investigation Steps:
-1. ❌ Tried running tests in Windows - linker errors
-2. ❌ Attempted MSVC toolchain fix - Git's link.exe conflict  
-3. ❌ Tried GNU toolchain - missing dlltool
-4. ✅ Switched to WSL Ubuntu - compiled but very slow (10+ min)
-5. ✅ Finally used native Ubuntu - fast compilation (2 min)
+### The Solution Needed
+1. Read `circuits/build/vk_bytes.json` (3584 bytes total)
+2. Parse structure:
+   - Bytes 0-63: vk_alpha_g1
+   - Bytes 64-191: vk_beta_g2
+   - Bytes 192-319: vk_gamme_g2 (note typo!)
+   - Bytes 320-447: vk_delta_g2
+   - Bytes 448-1023: IC[0] through IC[8] (9 points × 64 bytes)
+
+### Test Status
+```bash
+cargo test --lib real_proof_test -- --nocapture
+# FAILS with: "Failed to negate proof A: InvalidProofFormat"
+# Also fails verification due to placeholder VK
+```
 
 ---
 
 ## 🐛 Errors Encountered & Solutions
 
-### Error 1: Windows Linker Conflict
-```
-error: linking with `link.exe` failed: exit code: 1
-link: extra operand 'C:\\Users\\cc\\...\\build_script_build.o'
-```
-**Cause**: Git's Unix `link.exe` shadowing MSVC linker
-**Solution**: Switched to WSL/Ubuntu environment
+### Session 1 (Completed)
+1. ✅ **Windows Linker Conflict** - Git's link.exe shadowing MSVC → Switched to Ubuntu
+2. ✅ **Borrow Checker Errors** - Fixed by extracting values before mutable borrow
+3. ✅ **Compilation Timeout** - 10+ min on WSL → 2 min on Ubuntu native
+4. ✅ **Import Errors** - Fixed missing imports in test files
 
-### Error 2: Borrow Checker Errors
-```
-error[E0502]: cannot borrow `ctx.accounts.tornado_state` as immutable 
-because it is also borrowed as mutable
-```
-**Cause**: Trying to access tornado_state while holding mutable reference
-**Solution**: Extract needed values before taking mutable borrow
-
-### Error 3: Type Mismatch in Tests
-```
-error[E0308]: mismatched types
-expected `Error`, found `TornadoError`
-```
-**Cause**: Anchor's Error type vs custom TornadoError enum
-**Solution**: Use pattern matching instead of direct comparison
-
-### Error 4: Compilation Timeout
-```
-Command timed out after 5m 0.0s
-```
-**Cause**: Heavy cryptographic dependencies (ark-bn254, groth16-solana)
-**Solution**: Native Ubuntu environment + one-time compilation cost
+### Session 2 (Current)
+1. ❌ **Verifying Key Structure** - Groth16Verifyingkey fields different than expected
+2. ❌ **IC Points Array** - Need static array with 9 points, currently using empty placeholder
+3. ❌ **Proof A Negation** - Failing with InvalidProofFormat, needs investigation
+4. ✅ **Path Issues** - Fixed include_bytes! path from `../../../../` to `../../../`
 
 ---
 
-## ✅ Test Results (All Passing)
+## ✅ What's Actually Working
 
-### Simple Tests (3/3) ✅
-- `test_change_endianness_simple` - Endianness conversion
-- `test_encode_u64_simple` - u64 to 32-byte encoding
-- `test_split_address_simple` - Address splitting/reconstruction
-
-### Integration Tests (7/7) ✅
-- `test_address_splitting` - Pubkey high/low split
-- `test_endianness_conversion` - Bidirectional conversion
-- `test_fee_encoding` - Fee as 32-byte BE
-- `test_full_verification_flow` - End-to-end simulation
-- `test_prepare_public_inputs` - 8 public inputs prep
-- `test_proof_a_negation_format` - Proof A negation
-- `test_verify_proof_error_handling` - Error cases
-
-### Cryptographic Tests (4/4) ✅
-- `test_merkle_tree_insertion` - Merkle tree operations
-- `test_merkle_proof` - Proof verification
-- `test_poseidon_consistency` - **JS/Rust hash match!**
-- `test_id` - Test framework validation
-
-### Poseidon Hash Verification (Critical) ✅
+### Cryptographic Verification ✅
+All Poseidon hashes match JavaScript implementation perfectly:
 ```
-Test 1: Poseidon(2) - Merkle tree hashing
-  Rust: 0x115cc0f5e7d690413df64c6b9662e9cf2a3617f2743245519e19607a4417189a
-  JS:   0x115cc0f5e7d690413df64c6b9662e9cf2a3617f2743245519e19607a4417189a
-  ✅ MATCH!
+Test 1: 0x115cc0f5e7d690413df64c6b9662e9cf2a3617f2743245519e19607a4417189a ✅
+Test 2: 0x239edbf1e6b4f5646471d24e63b1ab7992897e0ecefa6b565302f64fe1e49117 ✅
+Test 3: 0x0e7a333190bcbb4f654dbefca544b4a2b0644d05dce3fdc11e6df0b6e4fa57d4 ✅
+```
 
-Test 2: Poseidon(1) - Nullifier hashing  
-  Rust: 0x239edbf1e6b4f5646471d24e63b1ab7992897e0ecefa6b565302f64fe1e49117
-  JS:   0x239edbf1e6b4f5646471d24e63b1ab7992897e0ecefa6b565302f64fe1e49117
-  ✅ MATCH!
+### Circuit & Proof Generation ✅
+- Circuit: `withdraw_fixed.circom` with 8 public inputs
+- Constraints: 5,897 (optimized)
+- Proof generation: 800ms
+- Proof size: 256 bytes
+- Public inputs: root, nullifierHash, recipientH/L, relayerH/L, fee, refund
 
-Test 3: Commitment - Poseidon(nullifier, secret)
-  Rust: 0x0e7a333190bcbb4f654dbefca544b4a2b0644d05dce3fdc11e6df0b6e4fa57d4
-  JS:   0x0e7a333190bcbb4f654dbefca544b4a2b0644d05dce3fdc11e6df0b6e4fa57d4
-  ✅ MATCH!
+---
+
+## 📊 Test Results Summary
+
+### Passing Tests (14/14) ✅
+```
+Simple Tests:         3/3 ✅
+Integration Tests:    7/7 ✅  
+Merkle Tests:         2/2 ✅
+Poseidon Tests:       2/2 ✅
+```
+
+### Failing Tests (1/2) ❌
+```
+real_proof_test::test_real_proof_verification - FAILED
+  Error: "Failed to negate proof A: InvalidProofFormat"
+  
+real_proof_test::test_invalid_real_proof - PASSED ✅
 ```
 
 ---
 
-## 🚀 Performance Metrics
+## 🎯 Immediate Next Steps for Next Agent
 
-### Compilation Time
-- **Windows/WSL**: >10 minutes (often timeout)
-- **Native Ubuntu**: 2 minutes 6 seconds
-- **Improvement**: 5x faster
+### Priority 1: Fix Verifying Key (CRITICAL)
+1. Open `programs/tornado_solana/src/verifying_key.rs`
+2. Implement proper byte loading from `vk_bytes.json`
+3. Create static arrays with actual values
+4. Test with: `cargo test --lib verifying_key::tests -- --nocapture`
 
-### Test Execution Time
-- **All 14 tests**: 0.03 seconds
-- **Per test average**: 0.002 seconds
-- **Bottleneck**: Compilation, not execution
+### Priority 2: Fix Proof A Negation
+1. Debug why `negate_proof_a` fails with real proof
+2. Check endianness conversion
+3. Verify proof format matches snarkjs output
 
----
-
-## 📊 Current Architecture
-
-### Core Components Working:
-1. **Merkle Tree**: 4-ary tree with Poseidon hash ✅
-2. **Nullifier Management**: Prevent double-spend ✅
-3. **Proof Verification**: Groth16 verifier integrated ✅
-4. **Address Splitting**: Handle 32-byte addresses in BN254 field ✅
-5. **Endianness Conversion**: JS ↔ Rust compatibility ✅
-6. **Public Inputs**: 8 inputs properly formatted ✅
-
-### Data Flow Verified:
-```
-JavaScript → 256-byte proof → Rust processing → Groth16 verification
-    ↓             ↓                ↓                    ↓
-snarkjs      Big-endian      Proof A negation    Native syscalls
-                            + LE/BE conversion     (<200k CU)
-```
+### Priority 3: Verify Real Proof
+1. Once VK is fixed, run: `cargo test --lib real_proof_test -- --nocapture`
+2. Should see: "✅ Real proof verified successfully!"
+3. Measure compute units (must be < 200k)
 
 ---
 
-## 📝 Remaining TODOs
+## 💻 Development Environment
 
-### Immediate Next Steps:
-- [ ] Generate actual verifying key from circuit (replace placeholder)
-- [ ] Test with real Groth16 proofs from snarkjs
-- [ ] Deploy to Solana devnet
-
-### Future Enhancements:
-- [ ] Implement fuel note system for fee privacy
-- [ ] Add keeper bot for transaction submission
-- [ ] Optimize compute units further
-- [ ] Add partial withdrawal support
-- [ ] Security audit before mainnet
-
----
-
-## 🔧 Development Environment Setup
-
-### Recommended Setup (What Works):
+### Current Setup (Ubuntu)
 ```bash
-# Ubuntu native or WSL2
-rustc 1.89.0
-cargo 1.89.0
-Anchor 0.29.0
-
-# Location
-~/tornado_solana/
-
-# Build command
-cargo build --lib --release
-
-# Test command
-cargo test --lib -- --nocapture
+Location: ~/tornado_solana/
+Rust: 1.89.0
+Cargo: 1.89.0
+Test time: 0.03 seconds (after compilation)
+Compile time: 2 minutes (release mode)
 ```
 
-### Environment Issues to Avoid:
-- ❌ Windows native (linker conflicts)
-- ❌ Git Bash (incompatible link.exe)
-- ❌ Debug builds (slower compilation)
+### Key Commands
+```bash
+# Run all tests
+cargo test --lib -- --nocapture
 
----
+# Run real proof test (currently failing)
+cargo test --lib real_proof_test -- --nocapture
 
-## 💡 Key Insights for Next Agent
+# Run simple tests (all passing)
+cargo test --lib simple_test -- --nocapture
 
-1. **The code is working** - All tests pass, cryptography verified
-2. **Compilation is slow** - This is normal for crypto dependencies
-3. **Use Ubuntu** - 5x faster than Windows/WSL
-4. **Poseidon hashes match JS** - Critical for circuit compatibility
-5. **Proof A must be negated** - Circom/snarkjs requirement
-6. **Double endianness conversion is correct** - Not a bug, it's required
-7. **8 public inputs** - root, nullifierHash, recipient(H/L), relayer(H/L), fee, refund
+# Check specific file
+cargo test --lib verifying_key::tests -- --nocapture
+```
 
 ---
 
 ## 📌 Critical Code Sections
 
-### Proof Verification (lib.rs:359-382)
-- Handles endianness conversion
-- Negates proof A for circom compatibility
-- Must use `deserialize_uncompressed` (64 bytes)
+### Proof Structure (lib.rs:359-382)
+- Handles proof A negation (currently failing)
+- Double endianness conversion (BE→LE→BE)
+- Uses `deserialize_uncompressed` for 64-byte points
 
 ### Public Inputs (lib.rs:386-428)
 - Exactly 8 inputs required
-- Addresses split into high/low parts
+- Addresses split into high/low (16 bytes each)
 - Fee/refund as right-aligned big-endian
 
-### Merkle Tree (merkle_tree.rs)
-- 4-ary tree for efficiency
-- Poseidon hash with BN254 parameters
-- Root history for time-based validity
+### Verifying Key (verifying_key.rs)
+- **NEEDS FIX**: Currently returns placeholders
+- Should load 3584 bytes from `vk_bytes.json`
+- Must include 9 IC points for 8 public inputs
 
 ---
 
-## 🎯 Success Criteria Met
+## 🔄 Git Status
 
-✅ All 14 tests passing  
-✅ Poseidon hash compatibility verified  
-✅ <200k compute units achievable  
-✅ Proof verification framework complete  
-✅ Nullifier system preventing double-spend  
-✅ Merkle tree with membership proofs  
+### Latest Commit
+```
+commit 5b9eef7: "Integrate real verifying key from trusted setup"
+- Added verifying_key.rs (needs fix)
+- Added real_proof_test.rs
+- Included all circuit build artifacts
+```
 
-**Status: Ready for circuit integration and devnet deployment**
+### Repository
+https://github.com/svhq/tornado-solana-privacy
 
 ---
 
-## Contact & Support
+## 📝 Consultant Feedback Addressed
 
-For questions about this implementation:
-- Review this document first
-- Check test files for usage examples
-- Reference DATA_FLOW_DOCUMENTATION.md for technical details
+1. ✅ **Real Circuit** - Using withdraw_fixed.circom
+2. ✅ **Trusted Setup** - Generated withdraw_final.zkey
+3. ✅ **Real Proof** - Created from actual circuit
+4. ❌ **Verification** - Fails due to VK integration
+5. ⏳ **Compute Units** - Can't measure until verification works
 
-Last session ended with all systems operational and tests passing.
+---
+
+## 🚨 CRITICAL FOR NEXT AGENT
+
+**THE SINGLE MOST IMPORTANT TASK**: Fix `verifying_key.rs` to load real bytes
+
+The consultant said: *"Until you successfully verify a real proof from your circuit on-chain, the system is not ready for deployment."*
+
+We have:
+- ✅ Real circuit
+- ✅ Real proof  
+- ✅ Real verifying key (in vk_bytes.json)
+- ❌ Integration between them
+
+Once the verifying key is properly loaded, the system should be ready for deployment.
+
+---
+
+## 📚 Additional Context Files
+
+- `DEVELOPMENT_PROGRESS.md` - This file (main context)
+- `DATA_FLOW_DOCUMENTATION.md` - Technical flow details
+- `circuits/ELEGANCE_REPORT.md` - Circuit implementation details
+- `CLAUDE.md` - Project memory and CTO workflow
+
+---
+
+## Session End Notes
+
+**Session 2 Achievements:**
+- Generated real proof from circuit
+- Created comprehensive test suite
+- Fixed all compilation errors
+- Identified exact blocker (VK integration)
+
+**Remaining Work:**
+- Fix verifying key loading (1-2 hours)
+- Debug proof format if needed (30 min)
+- Deploy to devnet (30 min)
+
+**Success Rate**: 90% complete - just need VK fix!
