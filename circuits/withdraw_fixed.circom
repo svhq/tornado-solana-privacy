@@ -13,6 +13,7 @@ template MerkleTreeChecker(levels) {
 
     component hashers[levels];
     component indexBits[levels];
+    signal selectors[levels];
     
     signal currentHash[levels + 1];
     currentHash[0] <== leaf;
@@ -22,8 +23,14 @@ template MerkleTreeChecker(levels) {
         indexBits[i].in <== pathIndices[i];
         
         hashers[i] = Poseidon(2);
-        hashers[i].inputs[0] <== currentHash[i] * (1 - indexBits[i].out[0]) + pathElements[i] * indexBits[i].out[0];
-        hashers[i].inputs[1] <== pathElements[i] * (1 - indexBits[i].out[0]) + currentHash[i] * indexBits[i].out[0];
+        
+        // Use proper selector logic to avoid non-quadratic constraints
+        // When index is 0: left = currentHash, right = pathElement
+        // When index is 1: left = pathElement, right = currentHash
+        selectors[i] <== indexBits[i].out[0];
+        
+        hashers[i].inputs[0] <== currentHash[i] + selectors[i] * (pathElements[i] - currentHash[i]);
+        hashers[i].inputs[1] <== pathElements[i] + selectors[i] * (currentHash[i] - pathElements[i]);
         
         currentHash[i + 1] <== hashers[i].out;
     }

@@ -4,7 +4,7 @@ mod integration_tests {
         change_endianness, encode_u64_as_32_bytes, negate_proof_a,
         prepare_public_inputs, reconstruct_address_from_high_low,
         split_address_to_high_low, verify_proof, 
-        TornadoError, PLACEHOLDER_VERIFYING_KEY,
+        TornadoError, get_circuit_verifying_key,
     };
     use anchor_lang::prelude::*;
     
@@ -197,7 +197,7 @@ mod integration_tests {
             &relayer,
             fee,
             refund,
-            &PLACEHOLDER_VERIFYING_KEY,
+            &get_circuit_verifying_key(),
         );
         
         // Should return InvalidProofLength error
@@ -219,7 +219,7 @@ mod integration_tests {
             &relayer,
             fee,
             refund,
-            &PLACEHOLDER_VERIFYING_KEY,
+            &get_circuit_verifying_key(),
         );
         
         // Should fail during proof processing

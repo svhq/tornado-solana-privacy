@@ -7,6 +7,9 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 pub mod merkle_tree;
 use merkle_tree::*;
 
+pub mod verifying_key;
+use verifying_key::get_withdraw_verifying_key;
+
 #[cfg(test)]
 mod poseidon_test;
 
@@ -15,6 +18,9 @@ mod integration_tests;
 
 #[cfg(test)]
 mod simple_test;
+
+#[cfg(test)]
+mod real_proof_test;
 
 declare_id!("11111111111111111111111111111112");
 
@@ -136,7 +142,7 @@ pub mod tornado_solana {
             &relayer.unwrap_or(Pubkey::default()), 
             fee, 
             refund, 
-            &PLACEHOLDER_VERIFYING_KEY
+            &get_circuit_verifying_key()
         )?;
         
         // Mark nullifier as spent
@@ -476,12 +482,8 @@ fn change_endianness(bytes: &[u8]) -> Vec<u8> {
     result
 }
 
-// Placeholder verifying key - will be replaced with actual key from trusted setup
-pub const PLACEHOLDER_VERIFYING_KEY: Groth16Verifyingkey = Groth16Verifyingkey {
-    nr_pubinputs: 8,
-    vk_alpha_g1: [0u8; 64],
-    vk_beta_g2: [0u8; 128],
-    vk_gamme_g2: [0u8; 128],
-    vk_delta_g2: [0u8; 128],
-    vk_ic: &[[0u8; 64]; 9], // 8 public inputs + 1
-};// Force update: Mon, Aug 25, 2025  7:51:00 PM
+// Get the actual verifying key from our trusted setup
+// This replaces the placeholder with the real key from withdraw_fixed.circom
+pub fn get_circuit_verifying_key() -> Groth16Verifyingkey {
+    get_withdraw_verifying_key()
+}

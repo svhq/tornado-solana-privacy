@@ -9,7 +9,7 @@ async function runTrustedSetup() {
     console.log('⚠️  WARNING: This is for DEVELOPMENT ONLY!');
     console.log('⚠️  For production, use a proper ceremony with multiple contributors\n');
 
-    const r1csPath = path.join(__dirname, '../build/withdraw.r1cs');
+    const r1csPath = path.join(__dirname, '../build/withdraw_fixed.r1cs');
     const ptauPath = path.join(__dirname, '../build/powersOfTau28_hez_final_15.ptau');
     const zkeyPath = path.join(__dirname, '../build/withdraw_0000.zkey');
     const finalZkeyPath = path.join(__dirname, '../build/withdraw_final.zkey');

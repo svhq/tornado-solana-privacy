@@ -61,7 +61,7 @@ async function testCircuit() {
         console.log();
         
         // Check if compiled files exist
-        const wasmPath = path.join(__dirname, '../build/withdraw_js/withdraw.wasm');
+        const wasmPath = path.join(__dirname, '../build/withdraw_fixed_js/withdraw_fixed.wasm');
         const zkeyPath = path.join(__dirname, '../build/withdraw_final.zkey');
         
         if (!fs.existsSync(wasmPath) || !fs.existsSync(zkeyPath)) {
