@@ -372,25 +372,23 @@ fn verify_proof(
 /// 2. ark-bn254 requirements (little-endian for serialization)  
 /// 3. groth16-solana expectations (big-endian proof components)
 fn negate_proof_a(proof_a_bytes: &[u8]) -> Result<[u8; 64]> {
-    // Convert to little-endian for ark-bn254 processing
-    // ark-bn254 uses little-endian for (de)serialization operations
-    let le_bytes = change_endianness(proof_a_bytes);
+    // Use hush's exact pattern - add zero byte for uncompressed format
+    let le_bytes_with_zero = [&change_endianness(proof_a_bytes)[..], &[0u8][..]].concat();
     
-    // Deserialize as G1 point (uncompressed - 64 bytes from snarkjs)
-    let point = G1Affine::deserialize_uncompressed(&le_bytes[..])
+    // Deserialize as G1 point (65 bytes - uncompressed with infinity bit)
+    let point = G1Affine::deserialize_uncompressed(&le_bytes_with_zero)
         .map_err(|_| TornadoError::InvalidProofFormat)?;
     
-    // Negate the point (required for Groth16 verification optimization)
+    // Negate the point (required for circom compatibility)
     let negated = -point;
     
-    // Serialize back to little-endian bytes
-    let mut output = vec![0u8; 64];
-    negated.serialize_uncompressed(&mut output[..])
+    // Serialize to 65-byte buffer
+    let mut proof_a_neg = [0u8; 65];
+    negated.serialize_uncompressed(&mut proof_a_neg[..])
         .map_err(|_| TornadoError::ProofNegationFailed)?;
     
-    // Convert back to big-endian for groth16-solana
-    // groth16-solana expects big-endian input format
-    let be_bytes = change_endianness(&output);
+    // Convert first 64 bytes back to big-endian for groth16-solana
+    let be_bytes = change_endianness(&proof_a_neg[..64]);
     
     Ok(be_bytes.try_into()
         .map_err(|_| TornadoError::InvalidProofFormat)?)
