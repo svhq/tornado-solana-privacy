@@ -39,7 +39,7 @@ mod real_proof_tests {
         let vk = get_circuit_verifying_key();
         
         // Verify the proof
-        println!("Testing real proof verification from withdraw circuit...");
+        println!("\n[VALID TEST] Testing real proof verification from withdraw circuit...");
         let result = verify_proof(
             &proof,
             &root.try_into().unwrap(),
@@ -53,10 +53,10 @@ mod real_proof_tests {
         
         match result {
             Ok(()) => {
-                println!("✅ Real proof verified successfully!");
+                println!("[VALID TEST] ✅ Real proof verified successfully!");
             }
             Err(e) => {
-                println!("❌ Proof verification failed: {:?}", e);
+                println!("[VALID TEST] ❌ Proof verification failed: {:?}", e);
                 panic!("Real proof should verify but failed");
             }
         }
@@ -87,6 +87,7 @@ mod real_proof_tests {
         let vk = get_circuit_verifying_key();
         
         // This should fail
+        println!("\n[INVALID TEST] Testing corrupted proof (should fail)...");
         let result = verify_proof(
             &proof,
             &root.try_into().unwrap(),
@@ -99,6 +100,6 @@ mod real_proof_tests {
         );
         
         assert!(result.is_err(), "Invalid proof should fail verification");
-        println!("✅ Invalid proof correctly rejected");
+        println!("[INVALID TEST] ✅ Invalid proof correctly rejected");
     }
 }
