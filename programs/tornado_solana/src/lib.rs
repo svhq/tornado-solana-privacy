@@ -11,6 +11,9 @@ use merkle_tree::*;
 #[cfg(test)]
 mod poseidon_test;
 
+#[cfg(test)]
+mod integration_tests;
+
 declare_id!("11111111111111111111111111111112");
 
 #[program]
@@ -116,10 +119,16 @@ pub mod tornado_solana {
         // This uses Solana's native alt_bn128 syscalls for <200k CU verification
         // TODO: In production, deserialize the actual verifying key from tornado_state.verifying_key
         // For now, we'll use a placeholder - the actual VK comes from the trusted setup
-        require!(
-            verify_proof(&proof, &root, &nullifier_hash, &recipient, &relayer.unwrap_or(Pubkey::default()), fee, refund, &PLACEHOLDER_VERIFYING_KEY), 
-            TornadoError::InvalidProof
-        );
+        verify_proof(
+            &proof, 
+            &root, 
+            &nullifier_hash, 
+            &recipient, 
+            &relayer.unwrap_or(Pubkey::default()), 
+            fee, 
+            refund, 
+            &PLACEHOLDER_VERIFYING_KEY
+        )?;
         
         // Mark nullifier as spent
         tornado_state.nullifier_hashes.push(nullifier_hash);
@@ -241,6 +250,14 @@ pub enum TornadoError {
     UnknownRoot,
     #[msg("Invalid withdraw proof")]
     InvalidProof,
+    #[msg("Invalid proof length - must be 256 bytes")]
+    InvalidProofLength,
+    #[msg("Invalid proof format")]
+    InvalidProofFormat,
+    #[msg("Failed to negate proof A")]
+    ProofNegationFailed,
+    #[msg("Failed to create Groth16 verifier")]
+    VerifierCreationFailed,
     #[msg("Merkle tree is full")]
     MerkleTreeFull,
 }
@@ -282,68 +299,82 @@ fn verify_proof(
     fee: u64,
     refund: u64,
     verifying_key: &Groth16Verifyingkey,
-) -> bool {
+) -> Result<()> {
     // Proof should be 256 bytes (64 bytes for A, 128 for B, 64 for C)
-    if proof.len() != 256 {
-        return false;
-    }
+    require!(
+        proof.len() == 256,
+        TornadoError::InvalidProofLength
+    );
     
     // Parse proof components with proper error handling
     let proof_a_bytes = &proof[0..64];
     let proof_b_bytes: [u8; 128] = proof[64..192].try_into()
-        .map_err(|_| { 
-            msg!("Invalid proof B length");
-            false 
-        }).ok()?;
+        .map_err(|_| {
+            msg!("Invalid proof B format");
+            TornadoError::InvalidProofFormat
+        })?;
     let proof_c_bytes: [u8; 64] = proof[192..256].try_into()
         .map_err(|_| {
-            msg!("Invalid proof C length");
-            false
-        }).ok()?;
+            msg!("Invalid proof C format");
+            TornadoError::InvalidProofFormat
+        })?;
     
     // Negate proof A (required for circom/snarkjs compatibility)
-    let proof_a_negated = match negate_proof_a(proof_a_bytes) {
-        Ok(negated_bytes) => negated_bytes,
-        Err(_) => return false,
-    };
+    let proof_a_negated = negate_proof_a(proof_a_bytes)
+        .map_err(|e| {
+            msg!("Failed to negate proof A: {}", e);
+            TornadoError::ProofNegationFailed
+        })?;
     
     // Prepare 8 public inputs as required by the circuit
     let public_inputs = prepare_public_inputs(root, nullifier_hash, recipient, relayer, fee, refund);
     
     // Create and run verifier with correct types
     // Rust will infer Groth16Verifier::<8> from the array type
-    match Groth16Verifier::new(
+    let mut verifier = Groth16Verifier::new(
         &proof_a_negated,
         &proof_b_bytes,
         &proof_c_bytes,
         &public_inputs,
         verifying_key,
-    ) {
-        Ok(mut verifier) => {
-            verifier.verify().is_ok()
-        }
-        Err(_) => false
-    }
+    ).map_err(|e| {
+        msg!("Failed to create verifier: {:?}", e);
+        TornadoError::VerifierCreationFailed
+    })?;
+    
+    verifier.verify().map_err(|e| {
+        msg!("Proof verification failed: {:?}", e);
+        TornadoError::InvalidProof
+    })?;
+    
+    Ok(())
 }
 
 /// Negate proof A using ark-bn254 (required for circom/snarkjs compatibility)
+/// 
+/// This function handles the necessary endianness conversions between:
+/// 1. snarkjs output format (big-endian field elements)
+/// 2. ark-bn254 requirements (little-endian for serialization)  
+/// 3. groth16-solana expectations (big-endian proof components)
 fn negate_proof_a(proof_a_bytes: &[u8]) -> Result<[u8; 64], &'static str> {
-    // Convert to little-endian for ark processing
+    // Convert to little-endian for ark-bn254 processing
+    // ark-bn254 uses little-endian for (de)serialization operations
     let le_bytes = change_endianness(proof_a_bytes);
     
     // Deserialize as G1 point (uncompressed - 64 bytes from snarkjs)
     let point = G1Affine::deserialize_uncompressed(&le_bytes[..])
         .map_err(|_| "Failed to deserialize proof A")?;
     
-    // Negate the point
+    // Negate the point (required for Groth16 verification optimization)
     let negated = -point;
     
-    // Serialize back to bytes
+    // Serialize back to little-endian bytes
     let mut output = vec![0u8; 64];
     negated.serialize_uncompressed(&mut output[..])
         .map_err(|_| "Failed to serialize negated proof A")?;
     
-    // Convert back to big-endian
+    // Convert back to big-endian for groth16-solana
+    // groth16-solana expects big-endian input format
     let be_bytes = change_endianness(&output);
     
     be_bytes.try_into()
@@ -418,6 +449,14 @@ fn reconstruct_address_from_high_low(high: &[u8; 32], low: &[u8; 32]) -> Pubkey 
 }
 
 /// Change endianness of bytes (big-endian <-> little-endian)
+/// 
+/// This function is essential for compatibility between:
+/// - snarkjs/JavaScript: outputs 32-byte big-endian field elements
+/// - ark-bn254: requires little-endian for (de)serialization
+/// - groth16-solana: expects big-endian proof components
+/// 
+/// The function processes bytes in 32-byte chunks (BN254 field size) and
+/// reverses the byte order within each chunk.
 fn change_endianness(bytes: &[u8]) -> Vec<u8> {
     let mut result = Vec::new();
     for chunk in bytes.chunks(32) {
