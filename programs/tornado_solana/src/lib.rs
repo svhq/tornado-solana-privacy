@@ -1,8 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::system_instruction;
 use groth16_solana::groth16::{Groth16Verifier, Groth16Verifyingkey};
-use ark_bn254::{G1Affine, G2Affine};
-use ark_ec::AffineRepr;
+use ark_bn254::G1Affine;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 
 pub mod merkle_tree;
@@ -13,6 +12,9 @@ mod poseidon_test;
 
 #[cfg(test)]
 mod integration_tests;
+
+#[cfg(test)]
+mod simple_test;
 
 declare_id!("11111111111111111111111111111112");
 
@@ -42,6 +44,10 @@ pub mod tornado_solana {
     /// Deposit funds into the tornado pool
     /// @param commitment: Hash(nullifier + secret)
     pub fn deposit(ctx: Context<Deposit>, commitment: [u8; 32]) -> Result<()> {
+        // Store keys and values before borrowing tornado_state mutably
+        let tornado_key = ctx.accounts.tornado_state.key();
+        let tornado_info = ctx.accounts.tornado_state.to_account_info();
+        
         let tornado_state = &mut ctx.accounts.tornado_state;
         
         // Check commitment hasn't been submitted before
@@ -50,18 +56,21 @@ pub mod tornado_solana {
             TornadoError::DuplicateCommitment
         );
         
+        // Store denomination before the transfer
+        let deposit_amount = tornado_state.denomination;
+        
         // Transfer SOL to the vault
         let transfer_ix = system_instruction::transfer(
             &ctx.accounts.depositor.key(),
-            &ctx.accounts.tornado_state.key(),
-            tornado_state.denomination,
+            &tornado_key,
+            deposit_amount,
         );
         
         anchor_lang::solana_program::program::invoke(
             &transfer_ix,
             &[
                 ctx.accounts.depositor.to_account_info(),
-                ctx.accounts.tornado_state.to_account_info(),
+                tornado_info,
                 ctx.accounts.system_program.to_account_info(),
             ],
         )?;
@@ -141,7 +150,7 @@ pub mod tornado_solana {
         **ctx.accounts.recipient.try_borrow_mut_lamports()? += amount;
         
         // Pay relayer fee if present
-        if let Some(relayer_pubkey) = relayer {
+        if let Some(_relayer_pubkey) = relayer {
             if fee > 0 {
                 **tornado_state.to_account_info().try_borrow_mut_lamports()? -= fee;
                 **ctx.accounts.relayer.as_ref().unwrap().try_borrow_mut_lamports()? += fee;
@@ -356,14 +365,14 @@ fn verify_proof(
 /// 1. snarkjs output format (big-endian field elements)
 /// 2. ark-bn254 requirements (little-endian for serialization)  
 /// 3. groth16-solana expectations (big-endian proof components)
-fn negate_proof_a(proof_a_bytes: &[u8]) -> Result<[u8; 64], &'static str> {
+fn negate_proof_a(proof_a_bytes: &[u8]) -> Result<[u8; 64]> {
     // Convert to little-endian for ark-bn254 processing
     // ark-bn254 uses little-endian for (de)serialization operations
     let le_bytes = change_endianness(proof_a_bytes);
     
     // Deserialize as G1 point (uncompressed - 64 bytes from snarkjs)
     let point = G1Affine::deserialize_uncompressed(&le_bytes[..])
-        .map_err(|_| "Failed to deserialize proof A")?;
+        .map_err(|_| TornadoError::InvalidProofFormat)?;
     
     // Negate the point (required for Groth16 verification optimization)
     let negated = -point;
@@ -371,14 +380,14 @@ fn negate_proof_a(proof_a_bytes: &[u8]) -> Result<[u8; 64], &'static str> {
     // Serialize back to little-endian bytes
     let mut output = vec![0u8; 64];
     negated.serialize_uncompressed(&mut output[..])
-        .map_err(|_| "Failed to serialize negated proof A")?;
+        .map_err(|_| TornadoError::ProofNegationFailed)?;
     
     // Convert back to big-endian for groth16-solana
     // groth16-solana expects big-endian input format
     let be_bytes = change_endianness(&output);
     
-    be_bytes.try_into()
-        .map_err(|_| "Invalid proof A length")
+    Ok(be_bytes.try_into()
+        .map_err(|_| TornadoError::InvalidProofFormat)?)
 }
 
 /// Prepare the 8 public inputs for the circuit:

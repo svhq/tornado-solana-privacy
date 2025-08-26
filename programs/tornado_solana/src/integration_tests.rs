@@ -1,10 +1,12 @@
 #[cfg(test)]
 mod integration_tests {
-    use super::*;
+    use crate::{
+        change_endianness, encode_u64_as_32_bytes, negate_proof_a,
+        prepare_public_inputs, reconstruct_address_from_high_low,
+        split_address_to_high_low, verify_proof, 
+        TornadoError, PLACEHOLDER_VERIFYING_KEY,
+    };
     use anchor_lang::prelude::*;
-    use ark_bn254::G1Affine;
-    use ark_ec::AffineRepr;
-    use ark_serialize::CanonicalSerialize;
     
     /// Test vector for a mock proof (256 bytes)
     /// This represents a properly formatted Groth16 proof from snarkjs
