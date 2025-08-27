@@ -22,6 +22,9 @@ mod simple_test;
 #[cfg(test)]
 mod real_proof_test;
 
+#[cfg(test)]
+mod final_verification_test;
+
 declare_id!("11111111111111111111111111111112");
 
 #[program]
