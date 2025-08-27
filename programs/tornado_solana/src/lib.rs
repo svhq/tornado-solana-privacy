@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::system_instruction;
+use anchor_lang::system_program;
 use groth16_solana::groth16::{Groth16Verifier, Groth16Verifyingkey};
 use ark_bn254::G1Affine;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -31,6 +32,9 @@ mod relayer_security_test;
 #[cfg(test)]
 mod verifying_key_security_test;
 
+#[cfg(test)]
+mod vault_pda_tests;
+
 declare_id!("11111111111111111111111111111112");
 
 #[program]
@@ -59,10 +63,6 @@ pub mod tornado_solana {
     /// Deposit funds into the tornado pool
     /// @param commitment: Hash(nullifier + secret)
     pub fn deposit(ctx: Context<Deposit>, commitment: [u8; 32]) -> Result<()> {
-        // Store keys and values before borrowing tornado_state mutably
-        let tornado_key = ctx.accounts.tornado_state.key();
-        let tornado_info = ctx.accounts.tornado_state.to_account_info();
-        
         let tornado_state = &mut ctx.accounts.tornado_state;
         
         // Check commitment hasn't been submitted before
@@ -74,20 +74,27 @@ pub mod tornado_solana {
         // Store denomination before the transfer
         let deposit_amount = tornado_state.denomination;
         
-        // Transfer SOL to the vault
-        let transfer_ix = system_instruction::transfer(
-            &ctx.accounts.depositor.key(),
-            &tornado_key,
-            deposit_amount,
-        );
+        // Validate vault PDA (security check)
+        let vault_bump = ctx.bumps.vault;
+        validate_vault_pda(
+            &ctx.accounts.vault,
+            &ctx.accounts.tornado_state.key(),
+            vault_bump,
+        )?;
         
-        anchor_lang::solana_program::program::invoke(
-            &transfer_ix,
-            &[
-                ctx.accounts.depositor.to_account_info(),
-                tornado_info,
+        // Note: Vault is initialized with rent-exempt balance in Initialize instruction,
+        // so no need to check rent exemption here
+        
+        // Transfer SOL to the vault using CPI
+        system_program::transfer(
+            CpiContext::new(
                 ctx.accounts.system_program.to_account_info(),
-            ],
+                system_program::Transfer {
+                    from: ctx.accounts.depositor.to_account_info(),
+                    to: ctx.accounts.vault.to_account_info(),
+                },
+            ),
+            deposit_amount,
         )?;
         
         // Insert commitment into merkle tree
@@ -158,15 +165,52 @@ pub mod tornado_solana {
             &stored_vk
         )?;
         
+        // Validate vault PDA (security check)
+        let vault_bump = ctx.bumps.vault;
+        validate_vault_pda(
+            &ctx.accounts.vault,
+            &ctx.accounts.tornado_state.key(),
+            vault_bump,
+        )?;
+        
         // Mark nullifier as spent
         tornado_state.nullifier_hashes.push(nullifier_hash);
         
         // Calculate withdrawal amount
         let amount = tornado_state.denomination - fee;
         
-        // Transfer to recipient
-        **tornado_state.to_account_info().try_borrow_mut_lamports()? -= amount;
-        **ctx.accounts.recipient.try_borrow_mut_lamports()? += amount;
+        // Prepare vault seeds for signing
+        let tornado_state_key = ctx.accounts.tornado_state.key();
+        let vault_seeds: &[&[u8]] = &[
+            b"vault",
+            tornado_state_key.as_ref(),
+            &[vault_bump]
+        ];
+        
+        // Check vault has sufficient balance for total payout
+        let rent = Rent::get()?;
+        let rent_minimum = rent.minimum_balance(0);
+        let total_payout = amount + fee;
+        
+        require!(
+            ctx.accounts.vault.lamports().saturating_sub(total_payout) >= rent_minimum,
+            TornadoError::VaultBelowRent
+        );
+        
+        // Transfer to recipient using CPI with vault signing
+        if amount > 0 {
+            system_program::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.system_program.to_account_info(),
+                    system_program::Transfer {
+                        from: ctx.accounts.vault.to_account_info(),
+                        to: ctx.accounts.recipient.clone(),
+                    },
+                    &[vault_seeds]
+                ),
+                amount,
+            )?;
+        }
         
         // Pay relayer fee if present - with security validations
         if let Some(relayer_pubkey) = relayer {
@@ -178,15 +222,25 @@ pub mod tornado_solana {
                 );
                 
                 // Security validation: Ensure the provided relayer account matches the specified pubkey
-                let relayer_account = ctx.accounts.relayer.as_ref().unwrap();
+                let relayer_account = ctx.accounts.relayer.as_ref()
+                    .ok_or(TornadoError::RelayerAccountMissing)?;
                 require!(
                     relayer_account.key() == relayer_pubkey,
                     TornadoError::RelayerMismatch
                 );
                 
-                // Transfer fee to verified relayer
-                **tornado_state.to_account_info().try_borrow_mut_lamports()? -= fee;
-                **relayer_account.try_borrow_mut_lamports()? += fee;
+                // Transfer fee to verified relayer using CPI with vault signing
+                system_program::transfer(
+                    CpiContext::new_with_signer(
+                        ctx.accounts.system_program.to_account_info(),
+                        system_program::Transfer {
+                            from: ctx.accounts.vault.to_account_info(),
+                            to: relayer_account.clone(),
+                        },
+                        &[vault_seeds]
+                    ),
+                    fee,
+                )?;
             }
         }
         
@@ -196,6 +250,42 @@ pub mod tornado_solana {
             relayer,
             fee,
         });
+        
+        Ok(())
+    }
+    
+    /// One-time migration to move existing funds from state account to vault
+    /// This should only be called once during the upgrade from old to new architecture
+    pub fn migrate_to_vault(ctx: Context<MigrateToVault>) -> Result<()> {
+        let tornado_state = &ctx.accounts.tornado_state;
+        
+        // Validate vault PDA
+        let vault_bump = ctx.bumps.vault;
+        validate_vault_pda(
+            &ctx.accounts.vault,
+            &tornado_state.key(),
+            vault_bump,
+        )?;
+        
+        // Calculate surplus funds in state account (above rent exemption)
+        let rent = Rent::get()?;
+        let state_account_size = 8 + TornadoState::MAX_SIZE;
+        let state_rent_minimum = rent.minimum_balance(state_account_size);
+        let current_state_balance = ctx.accounts.tornado_state.to_account_info().lamports();
+        
+        // Only migrate if there's surplus
+        if current_state_balance > state_rent_minimum {
+            let migration_amount = current_state_balance - state_rent_minimum;
+            
+            // Transfer surplus from state account to vault
+            **ctx.accounts.tornado_state.to_account_info().try_borrow_mut_lamports()? -= migration_amount;
+            **ctx.accounts.vault.to_account_info().try_borrow_mut_lamports()? += migration_amount;
+            
+            emit!(MigrationEvent {
+                amount_migrated: migration_amount,
+                timestamp: Clock::get()?.unix_timestamp,
+            });
+        }
         
         Ok(())
     }
@@ -216,6 +306,15 @@ pub struct Initialize<'info> {
     )]
     pub tornado_state: Account<'info, TornadoState>,
     
+    #[account(
+        init,
+        payer = authority,
+        space = 0,  // 0-byte SystemAccount for holding SOL only
+        seeds = [b"vault", tornado_state.key().as_ref()],
+        bump
+    )]
+    pub vault: SystemAccount<'info>,
+    
     #[account(mut)]
     pub authority: Signer<'info>,
     
@@ -226,6 +325,13 @@ pub struct Initialize<'info> {
 pub struct Deposit<'info> {
     #[account(mut)]
     pub tornado_state: Account<'info, TornadoState>,
+    
+    #[account(
+        mut,
+        seeds = [b"vault", tornado_state.key().as_ref()],
+        bump
+    )]
+    pub vault: SystemAccount<'info>,
     
     #[account(mut)]
     pub depositor: Signer<'info>,
@@ -238,6 +344,13 @@ pub struct Withdraw<'info> {
     #[account(mut)]
     pub tornado_state: Account<'info, TornadoState>,
     
+    #[account(
+        mut,
+        seeds = [b"vault", tornado_state.key().as_ref()],
+        bump
+    )]
+    pub vault: SystemAccount<'info>,
+    
     /// CHECK: Recipient of withdrawn funds
     #[account(mut)]
     pub recipient: AccountInfo<'info>,
@@ -245,6 +358,27 @@ pub struct Withdraw<'info> {
     /// CHECK: Optional relayer receiving fee
     #[account(mut)]
     pub relayer: Option<AccountInfo<'info>>,
+    
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct MigrateToVault<'info> {
+    #[account(
+        mut,
+        has_one = authority
+    )]
+    pub tornado_state: Account<'info, TornadoState>,
+    
+    #[account(
+        mut,
+        seeds = [b"vault", tornado_state.key().as_ref()],
+        bump
+    )]
+    pub vault: SystemAccount<'info>,
+    
+    #[account(mut)]
+    pub authority: Signer<'info>,
 }
 
 #[account]
@@ -280,6 +414,12 @@ pub struct WithdrawalEvent {
     pub fee: u64,
 }
 
+#[event]
+pub struct MigrationEvent {
+    pub amount_migrated: u64,
+    pub timestamp: i64,
+}
+
 #[error_code]
 pub enum TornadoError {
     #[msg("The commitment has been submitted")]
@@ -308,6 +448,14 @@ pub enum TornadoError {
     RecipientCannotBeRelayer,
     #[msg("Invalid or corrupted verifying key data")]
     InvalidVerifyingKey,
+    #[msg("Vault PDA doesn't match expected derivation")]
+    VaultMismatch,
+    #[msg("Vault account is not owned by System Program")]
+    VaultNotSystemOwned,
+    #[msg("Withdrawal would drop vault below rent minimum")]
+    VaultBelowRent,
+    #[msg("Relayer account missing when required")]
+    RelayerAccountMissing,
 }
 
 // Helper functions
@@ -513,6 +661,44 @@ fn change_endianness(bytes: &[u8]) -> Vec<u8> {
         }
     }
     result
+}
+
+/// Validate vault PDA derivation and ownership
+/// 
+/// This function ensures the vault account provided in the transaction
+/// matches the expected PDA derivation and is owned by the System Program.
+/// This prevents vault substitution attacks where malicious actors could
+/// provide a different account as the vault.
+fn validate_vault_pda(
+    vault: &SystemAccount,
+    tornado_state_key: &Pubkey,
+    expected_bump: u8,
+) -> Result<()> {
+    // Derive expected vault PDA
+    let (expected_vault_key, derived_bump) = Pubkey::find_program_address(
+        &[b"vault", tornado_state_key.as_ref()],
+        &crate::ID,
+    );
+    
+    // Verify the vault key matches expected derivation
+    require!(
+        vault.key() == expected_vault_key,
+        TornadoError::VaultMismatch
+    );
+    
+    // Verify bump matches
+    require!(
+        expected_bump == derived_bump,
+        TornadoError::VaultMismatch
+    );
+    
+    // Verify vault is owned by System Program
+    require!(
+        vault.owner == &system_program::ID,
+        TornadoError::VaultNotSystemOwned
+    );
+    
+    Ok(())
 }
 
 /// **CRITICAL SECURITY FUNCTION**: Safely deserialize stored verifying key from trusted setup
