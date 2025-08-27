@@ -257,13 +257,11 @@ pub mod tornado_solana {
     /// One-time migration to move existing funds from state account to vault
     /// This should only be called once during the upgrade from old to new architecture
     pub fn migrate_to_vault(ctx: Context<MigrateToVault>) -> Result<()> {
-        let tornado_state = &ctx.accounts.tornado_state;
-        
-        // Validate vault PDA
+        // Validate vault PDA (security check)
         let vault_bump = ctx.bumps.vault;
         validate_vault_pda(
             &ctx.accounts.vault,
-            &tornado_state.key(),
+            &ctx.accounts.tornado_state.key(),
             vault_bump,
         )?;
         
@@ -271,15 +269,29 @@ pub mod tornado_solana {
         let rent = Rent::get()?;
         let state_account_size = 8 + TornadoState::MAX_SIZE;
         let state_rent_minimum = rent.minimum_balance(state_account_size);
-        let current_state_balance = ctx.accounts.tornado_state.to_account_info().lamports();
+        let state_account_info = ctx.accounts.tornado_state.to_account_info();
+        let current_state_balance = state_account_info.lamports();
         
         // Only migrate if there's surplus
         if current_state_balance > state_rent_minimum {
             let migration_amount = current_state_balance - state_rent_minimum;
             
-            // Transfer surplus from state account to vault
-            **ctx.accounts.tornado_state.to_account_info().try_borrow_mut_lamports()? -= migration_amount;
-            **ctx.accounts.vault.to_account_info().try_borrow_mut_lamports()? += migration_amount;
+            // Prepare tornado_state PDA seeds for signing
+            let state_bump = ctx.bumps.tornado_state;
+            let state_seeds: &[&[u8]] = &[b"tornado", &[state_bump]];
+            
+            // Transfer surplus from state account to vault using CPI with PDA signing
+            system_program::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.system_program.to_account_info(),
+                    system_program::Transfer {
+                        from: state_account_info.clone(),
+                        to: ctx.accounts.vault.to_account_info(),
+                    },
+                    &[state_seeds],
+                ),
+                migration_amount,
+            )?;
             
             emit!(MigrationEvent {
                 amount_migrated: migration_amount,
@@ -366,7 +378,9 @@ pub struct Withdraw<'info> {
 pub struct MigrateToVault<'info> {
     #[account(
         mut,
-        has_one = authority
+        has_one = authority,
+        seeds = [b"tornado"],
+        bump
     )]
     pub tornado_state: Account<'info, TornadoState>,
     
@@ -379,6 +393,8 @@ pub struct MigrateToVault<'info> {
     
     #[account(mut)]
     pub authority: Signer<'info>,
+    
+    pub system_program: Program<'info, System>,
 }
 
 #[account]
