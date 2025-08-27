@@ -25,6 +25,9 @@ mod real_proof_test;
 #[cfg(test)]
 mod final_verification_test;
 
+#[cfg(test)]
+mod relayer_security_test;
+
 declare_id!("11111111111111111111111111111112");
 
 #[program]
@@ -158,11 +161,25 @@ pub mod tornado_solana {
         **tornado_state.to_account_info().try_borrow_mut_lamports()? -= amount;
         **ctx.accounts.recipient.try_borrow_mut_lamports()? += amount;
         
-        // Pay relayer fee if present
-        if let Some(_relayer_pubkey) = relayer {
+        // Pay relayer fee if present - with security validations
+        if let Some(relayer_pubkey) = relayer {
             if fee > 0 {
+                // Security validation: Ensure recipient cannot be the relayer (self-pay attack prevention)
+                require!(
+                    recipient != relayer_pubkey,
+                    TornadoError::RecipientCannotBeRelayer
+                );
+                
+                // Security validation: Ensure the provided relayer account matches the specified pubkey
+                let relayer_account = ctx.accounts.relayer.as_ref().unwrap();
+                require!(
+                    relayer_account.key() == relayer_pubkey,
+                    TornadoError::RelayerMismatch
+                );
+                
+                // Transfer fee to verified relayer
                 **tornado_state.to_account_info().try_borrow_mut_lamports()? -= fee;
-                **ctx.accounts.relayer.as_ref().unwrap().try_borrow_mut_lamports()? += fee;
+                **relayer_account.try_borrow_mut_lamports()? += fee;
             }
         }
         
@@ -278,6 +295,10 @@ pub enum TornadoError {
     VerifierCreationFailed,
     #[msg("Merkle tree is full")]
     MerkleTreeFull,
+    #[msg("Relayer account does not match specified relayer address")]
+    RelayerMismatch,
+    #[msg("Recipient cannot be the relayer")]
+    RecipientCannotBeRelayer,
 }
 
 // Helper functions
