@@ -9,6 +9,7 @@ pub mod merkle_tree;
 use merkle_tree::*;
 
 pub mod verifying_key;
+#[cfg(test)]
 use verifying_key::get_circuit_verifying_key;
 
 #[cfg(test)]

@@ -1,7 +1,11 @@
 use groth16_solana::groth16::Groth16Verifyingkey;
 
+// IMPORTANT: This verifying key is for testing only!
+// Production code uses deserialize_verifying_key() with stored VK
+// This has 8 public inputs matching the actual circuit
+#[cfg(test)]
 pub const VERIFYINGKEY: Groth16Verifyingkey = Groth16Verifyingkey {
-    nr_pubinputs: 7,
+    nr_pubinputs: 8,  // Fixed from 7 to match verification_key.json
 
     vk_alpha_g1: [
         45, 77, 154, 167, 227, 2, 217, 223, 65, 116, 157, 85, 7, 148, 157, 5, 219, 234, 51, 251, 177, 108, 100, 59, 34, 245, 153, 162, 190, 109, 242, 226, 20, 190, 221, 80, 60, 55, 206, 176, 97, 216, 236, 96, 32, 159, 227, 69, 206, 137, 131, 10, 25, 35, 3, 1, 240, 118, 202, 255, 0, 77, 25, 38,
@@ -51,6 +55,7 @@ pub const VERIFYINGKEY: Groth16Verifyingkey = Groth16Verifyingkey {
 };
 
 /// Get the verifying key for the withdraw circuit
+#[cfg(test)]  // Only available in tests - prevents accidental production use
 pub fn get_circuit_verifying_key() -> &'static Groth16Verifyingkey<'static> {
     &VERIFYINGKEY
 }

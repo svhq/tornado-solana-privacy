@@ -33,14 +33,16 @@ impl MerkleTree {
         }
     }
     
-    /// Generate zero values for empty leaves (matching Tornado Cash)
+    /// Generate zero values for empty leaves (Poseidon-based for circuit compatibility)
     fn generate_zeros() -> [[u8; 32]; 20] {
         let mut zeros = [[0u8; 32]; 20];
         
-        // Start with keccak256("tornado") % FIELD_SIZE
-        // Simplified for Solana (using full hash)
+        // For Poseidon-based circuits, we use the hash of zero
+        // This matches what circomlib's MerkleTree expects
+        // The first zero is Poseidon(0)
         zeros[0] = Self::hash_leaf(&[0u8; 32]);
         
+        // Each subsequent zero is the hash of two previous zeros
         for i in 1..20 {
             zeros[i] = Self::hash_left_right(&zeros[i - 1], &zeros[i - 1]);
         }
@@ -124,7 +126,7 @@ impl MerkleTree {
         }
     }
     
-    /// Generate merkle proof for a given leaf
+    /// Generate merkle proof for a given leaf (siblings only)
     pub fn get_proof(&self, leaf_index: u32) -> Vec<[u8; 32]> {
         let mut proof = Vec::new();
         let mut index = leaf_index;
@@ -132,19 +134,42 @@ impl MerkleTree {
         for i in 0..self.levels as usize {
             if index % 2 == 0 {
                 // If even, sibling is on the right
-                if index + 1 < 2_u32.pow(i as u32 + 1) {
-                    proof.push(self.zeros[i]);
-                } else {
-                    proof.push(self.zeros[i]);
-                }
+                // For even nodes, we need to check if a right sibling exists
+                // This happens when there's another leaf at index + 1
+                proof.push(self.zeros[i]);
             } else {
-                // If odd, sibling is on the left
+                // If odd, sibling is on the left (always exists and is filled)
                 proof.push(self.filled_subtrees[i]);
             }
             index /= 2;
         }
         
         proof
+    }
+    
+    /// Generate merkle path with siblings and direction bits
+    /// Returns (siblings, path_bits) where path_bits[i] = true if going right at level i
+    pub fn get_path(&self, leaf_index: u32) -> (Vec<[u8; 32]>, Vec<bool>) {
+        let mut siblings = Vec::new();
+        let mut path_bits = Vec::new();
+        let mut index = leaf_index;
+        
+        for i in 0..self.levels as usize {
+            // Path bit indicates if we're the right child (1) or left child (0)
+            let is_right_child = index % 2 == 1;
+            path_bits.push(is_right_child);
+            
+            if is_right_child {
+                // We're the right child, sibling is on the left
+                siblings.push(self.filled_subtrees[i]);
+            } else {
+                // We're the left child, sibling is on the right
+                siblings.push(self.zeros[i]);
+            }
+            index /= 2;
+        }
+        
+        (siblings, path_bits)
     }
     
     /// Verify a merkle proof
@@ -203,5 +228,73 @@ mod tests {
         
         let proof = tree.get_proof(index);
         assert!(MerkleTree::verify_proof(&root, &leaf, &proof, index));
+    }
+    
+    #[test]
+    fn test_get_path_with_bits() {
+        let mut tree = MerkleTree::new();
+        
+        // Insert multiple leaves to test different paths
+        let leaf1 = [1u8; 32];
+        let leaf2 = [2u8; 32];
+        let leaf3 = [3u8; 32];
+        
+        tree.insert(leaf1).unwrap();
+        tree.insert(leaf2).unwrap();
+        let index3 = tree.insert(leaf3).unwrap();
+        
+        // Get path for third leaf (index 2)
+        let (siblings, path_bits) = tree.get_path(index3);
+        
+        // Verify we have the correct number of elements
+        assert_eq!(siblings.len(), 20);
+        assert_eq!(path_bits.len(), 20);
+        
+        // Index 2 in binary is 0010, so:
+        // Level 0: index 2 % 2 = 0 (left child)
+        // Level 1: index 1 % 2 = 1 (right child)
+        // Level 2: index 0 % 2 = 0 (left child)
+        assert_eq!(path_bits[0], false); // left at level 0
+        assert_eq!(path_bits[1], true);  // right at level 1
+        assert_eq!(path_bits[2], false); // left at level 2
+    }
+    
+    #[test]
+    fn test_zero_values_poseidon() {
+        let tree = MerkleTree::new();
+        
+        // Verify first zero is Poseidon(0)
+        let expected_first_zero = MerkleTree::hash_leaf(&[0u8; 32]);
+        assert_eq!(tree.zeros[0], expected_first_zero);
+        
+        // Verify each subsequent zero is hash of previous two
+        for i in 1..20 {
+            let expected = MerkleTree::hash_left_right(&tree.zeros[i-1], &tree.zeros[i-1]);
+            assert_eq!(tree.zeros[i], expected);
+        }
+    }
+    
+    #[test]
+    fn test_proof_verification_multiple_leaves() {
+        let mut tree = MerkleTree::new();
+        
+        // Insert 4 leaves
+        let leaves = [[1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32]];
+        let mut indices = Vec::new();
+        
+        for leaf in &leaves {
+            indices.push(tree.insert(*leaf).unwrap());
+        }
+        
+        let root = tree.get_root();
+        
+        // Verify proof for each leaf
+        for (i, leaf) in leaves.iter().enumerate() {
+            let proof = tree.get_proof(indices[i]);
+            assert!(
+                MerkleTree::verify_proof(&root, leaf, &proof, indices[i]),
+                "Proof verification failed for leaf at index {}", indices[i]
+            );
+        }
     }
 }
