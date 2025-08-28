@@ -66,6 +66,12 @@ pub mod tornado_solana {
     pub fn deposit(ctx: Context<Deposit>, commitment: [u8; 32]) -> Result<()> {
         let tornado_state = &mut ctx.accounts.tornado_state;
         
+        // Check pool capacity (temporary safeguard until PDA implementation)
+        require!(
+            tornado_state.commitments.len() < MAX_COMMITMENTS_PER_POOL,
+            TornadoError::PoolFull
+        );
+        
         // Check commitment hasn't been submitted before
         require!(
             !tornado_state.commitments.contains(&commitment),
@@ -134,6 +140,12 @@ pub mod tornado_solana {
         
         // Verify fee doesn't exceed denomination
         require!(fee <= tornado_state.denomination, TornadoError::FeeExceedsDenomination);
+        
+        // Check pool capacity (temporary safeguard until PDA implementation)
+        require!(
+            tornado_state.nullifier_hashes.len() < MAX_NULLIFIERS_PER_POOL,
+            TornadoError::PoolFull
+        );
         
         // Check nullifier hasn't been spent
         require!(
@@ -308,6 +320,12 @@ pub mod tornado_solana {
 pub const ROOT_HISTORY_SIZE: u32 = 30;
 pub const MERKLE_TREE_HEIGHT: u32 = 20;
 
+// Scaling limit - prevents O(n) Vec operations from exceeding compute limits
+// At 10k nullifiers, .contains() uses ~300-500k compute units
+// This is a temporary safeguard until PDA map implementation
+pub const MAX_NULLIFIERS_PER_POOL: usize = 10_000;
+pub const MAX_COMMITMENTS_PER_POOL: usize = 10_000;
+
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     #[account(
@@ -473,6 +491,8 @@ pub enum TornadoError {
     VaultBelowRent,
     #[msg("Relayer account missing when required")]
     RelayerAccountMissing,
+    #[msg("Pool has reached maximum capacity - temporary safeguard")]
+    PoolFull,
 }
 
 // Helper functions
