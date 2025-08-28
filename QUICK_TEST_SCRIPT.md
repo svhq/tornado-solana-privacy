@@ -13,13 +13,13 @@ cargo check --lib
 ### Step 2: Run Core Tests
 ```bash
 # Test the nullifier PDA solution
-cargo test --lib nullifier_pda_test -- --nocapture
+cargo test --lib nullifier_pda_tests -- --nocapture
 
 # Test Merkle tree
 cargo test --lib merkle_tree::tests -- --nocapture
 
-# Test proof verification (if you have proofs)
-cargo test --lib real_proof_test -- --nocapture
+# Test proof verification (REQUIRES vk_bytes.json - no mock fallback)
+cargo test --lib real_proof_tests -- --nocapture
 ```
 
 ### Step 3: Quick Integration Test
@@ -29,7 +29,11 @@ cargo test --lib real_proof_test -- --nocapture
 # 2. Deploy program
 # 3. Run basic deposit/withdraw simulation
 
-anchor test --skip-build
+# With compute unit logging:
+anchor test --skip-build -- --nocapture
+
+# Look for lines like:
+# "Program consumed 150234 of 200000 compute units"
 ```
 
 ---
@@ -74,8 +78,10 @@ Fix: cargo add anchor-lang
 
 **3. Circuit Files Missing**
 ```
-Error: verification_key.json not found
-Fix: Use mock VK for testing (already in code)
+Error: vk_bytes.json not found
+Fix: MUST have real circuit files - no mock fallback!
+     cd circuits && npm run build
+     This creates vk_bytes.json needed for stored-VK path
 ```
 
 ---

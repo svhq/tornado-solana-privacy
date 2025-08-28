@@ -8,12 +8,14 @@ We'll run a complete test suite locally using Anchor's test validator, verifying
 
 ## ✅ Prerequisites Check
 
-### Circuit Artifacts (READY)
+### Circuit Artifacts (REQUIRED - NO MOCK FALLBACK)
 ```
 ✅ circuits/build/withdraw_final.zkey     - Proving key
 ✅ circuits/build/verification_key.json   - Human-readable VK
-✅ circuits/build/vk_bytes.json          - Binary VK for Rust
+✅ circuits/build/vk_bytes.json          - Binary VK for Rust (MUST EXIST)
 ```
+
+⚠️ **IMPORTANT**: Run `initialize(vk_bytes.json)` as Step 1 to store the VK on-chain before any withdraw tests. Tests will fail if VK files are missing - this is intentional to ensure we test the stored-VK path.
 
 ### Dependencies Needed
 ```bash
@@ -41,13 +43,22 @@ Test components working together:
 4. **Relayer Security** - Fee validation
 
 ### Level 3: End-to-End Test
-Complete user journey:
+Complete user journey with verification:
 ```
-1. Initialize pool
+1. Initialize pool with vk_bytes.json content
 2. Deposit 1 SOL
+   a. Assert vault received funds
+   b. Fetch on-chain root
+   c. Build off-chain tree with same zero-chain
+   d. Assert roots match (CRITICAL for proof generation)
 3. Generate proof (off-chain)
 4. Withdraw to new address
-5. Attempt double-spend (should fail)
+   a. Assert recipient credited
+   b. Verify nullifier PDA created
+   c. Log who paid PDA rent (relayer vs user)
+5. Attempt double-spend with same nullifier
+   a. MUST fail at PDA init
+   b. Assert error is "account already exists"
 ```
 
 ---
@@ -187,13 +198,22 @@ npm run build  # Or follow setup.js, compile.js, generate_vk.js
 
 ## 📈 Performance Benchmarks
 
-### Expected Results
-| Operation | Compute Units | Time |
-|-----------|--------------|------|
-| Initialize | ~50k | <1s |
-| Deposit | ~80k | <1s |
-| Withdraw | ~150k | <2s |
-| Nullifier Check | ~3k | <0.1s |
+### How to Record ACTUAL Compute Units
+```bash
+# Run with --nocapture to see logs
+anchor test -- --nocapture
+
+# Look for lines like:
+# "Program ToRNaDo111... consumed 152341 of 200000 compute units"
+```
+
+### Record From Logs (Not Estimates)
+| Operation | Actual CU (from logs) | Target |
+|-----------|----------------------|--------|
+| Initialize | _____ (record here) | <50k |
+| Deposit | _____ (record here) | <80k |
+| Withdraw | _____ (record here) | <200k |
+| Nullifier Check | _____ (record here) | <5k |
 
 ### Optimization Targets
 - Total CU per withdraw: < 200k ✅
@@ -240,9 +260,18 @@ Results:
 [ ] Unit tests pass (X/Y)
 [ ] Integration tests pass (X/Y)
 [ ] Security tests pass (X/Y)
-[ ] Compute units: ___k
+[ ] VK loaded from vk_bytes.json: Yes/No
+[ ] Off-chain/on-chain roots match: Yes/No
 [ ] Double-spend blocked: Yes/No
-[ ] Ready for devnet: Yes/No
+
+Compute Units (from logs):
+- Initialize: _____ CU
+- Deposit: _____ CU  
+- Withdraw: _____ CU
+- Nullifier PDA: _____ CU
+
+Rent Payer: [relayer/recipient]
+Ready for devnet: Yes/No
 
 Notes:
 [Any issues or observations]

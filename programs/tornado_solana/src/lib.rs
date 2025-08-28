@@ -39,6 +39,9 @@ mod verifying_key_security_test;
 #[cfg(test)]
 mod vault_pda_tests;
 
+#[cfg(test)]
+mod stored_vk_integration_test;
+
 // Program ID must match Anchor.toml for deployment
 declare_id!("ToRNaDo1111111111111111111111111111111111111");
 
