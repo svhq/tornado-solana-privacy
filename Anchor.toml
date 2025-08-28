@@ -1,5 +1,5 @@
 [features]
-seeds = false
+seeds = true  # Enable runtime PDA validation for extra security
 skip-lint = false
 
 [programs.localnet]

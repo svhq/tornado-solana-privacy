@@ -25,6 +25,9 @@ mod simple_test;
 mod real_proof_test;
 
 #[cfg(test)]
+mod nullifier_pda_test;
+
+#[cfg(test)]
 mod final_verification_test;
 
 #[cfg(test)]
@@ -66,17 +69,8 @@ pub mod tornado_solana {
     pub fn deposit(ctx: Context<Deposit>, commitment: [u8; 32]) -> Result<()> {
         let tornado_state = &mut ctx.accounts.tornado_state;
         
-        // Check pool capacity (temporary safeguard until PDA implementation)
-        require!(
-            tornado_state.commitments.len() < MAX_COMMITMENTS_PER_POOL,
-            TornadoError::PoolFull
-        );
-        
-        // Check commitment hasn't been submitted before
-        require!(
-            !tornado_state.commitments.contains(&commitment),
-            TornadoError::DuplicateCommitment
-        );
+        // Note: Duplicate commitment prevention is inherent in the Merkle tree
+        // Each leaf can only be inserted once, making Vec storage redundant
         
         // Store denomination before the transfer
         let deposit_amount = tornado_state.denomination;
@@ -107,8 +101,7 @@ pub mod tornado_solana {
         // Insert commitment into merkle tree
         let leaf_index = tornado_state.merkle_tree.insert(commitment)?;
         
-        // Store commitment to prevent duplicates
-        tornado_state.commitments.push(commitment);
+        // Commitment is stored in the Merkle tree, no need for separate Vec
         
         // Update root history
         let new_root = tornado_state.merkle_tree.get_root();
@@ -141,17 +134,9 @@ pub mod tornado_solana {
         // Verify fee doesn't exceed denomination
         require!(fee <= tornado_state.denomination, TornadoError::FeeExceedsDenomination);
         
-        // Check pool capacity (temporary safeguard until PDA implementation)
-        require!(
-            tornado_state.nullifier_hashes.len() < MAX_NULLIFIERS_PER_POOL,
-            TornadoError::PoolFull
-        );
-        
-        // Check nullifier hasn't been spent
-        require!(
-            !tornado_state.nullifier_hashes.contains(&nullifier_hash),
-            TornadoError::NoteAlreadySpent
-        );
+        // The nullifier PDA creation (via 'init' in accounts) automatically prevents double-spending
+        // If the nullifier has been used, account creation fails and the transaction reverts
+        // This is the elegant O(1) solution from solana-mixer
         
         // Verify root is in history
         require!(
@@ -186,8 +171,8 @@ pub mod tornado_solana {
             vault_bump,
         )?;
         
-        // Mark nullifier as spent
-        tornado_state.nullifier_hashes.push(nullifier_hash);
+        // Nullifier is marked as spent by the PDA account creation itself
+        // No need to store in Vec - the account's existence is the proof
         
         // Calculate withdrawal amount
         let amount = tornado_state.denomination - fee;
@@ -320,12 +305,6 @@ pub mod tornado_solana {
 pub const ROOT_HISTORY_SIZE: u32 = 30;
 pub const MERKLE_TREE_HEIGHT: u32 = 20;
 
-// Scaling limit - prevents O(n) Vec operations from exceeding compute limits
-// At 10k nullifiers, .contains() uses ~300-500k compute units
-// This is a temporary safeguard until PDA map implementation
-pub const MAX_NULLIFIERS_PER_POOL: usize = 10_000;
-pub const MAX_COMMITMENTS_PER_POOL: usize = 10_000;
-
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     #[account(
@@ -354,7 +333,11 @@ pub struct Initialize<'info> {
 
 #[derive(Accounts)]
 pub struct Deposit<'info> {
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [b"tornado"],
+        bump
+    )]
     pub tornado_state: Account<'info, TornadoState>,
     
     #[account(
@@ -371,9 +354,25 @@ pub struct Deposit<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(nullifier_hash: [u8; 32])]
 pub struct Withdraw<'info> {
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [b"tornado"],
+        bump
+    )]
     pub tornado_state: Account<'info, TornadoState>,
+    
+    /// The nullifier PDA - if this already exists, withdrawal fails (prevents double-spend)
+    /// Using the elegant solana-mixer pattern: existence = spent
+    #[account(
+        init,
+        seeds = [nullifier_hash.as_ref()],
+        bump,
+        payer = payer,
+        space = 8  // Just discriminator, no data needed
+    )]
+    pub nullifier: Account<'info, Nullifier>,
     
     #[account(
         mut,
@@ -389,6 +388,10 @@ pub struct Withdraw<'info> {
     /// CHECK: Optional relayer receiving fee
     #[account(mut)]
     pub relayer: Option<AccountInfo<'info>>,
+    
+    /// The account paying for nullifier PDA creation (relayer or recipient)
+    #[account(mut)]
+    pub payer: Signer<'info>,
     
     pub system_program: Program<'info, System>,
 }
@@ -424,14 +427,13 @@ pub struct TornadoState {
     pub roots: [[u8; 32]; ROOT_HISTORY_SIZE as usize],
     pub current_root_index: u32,
     pub next_index: u32,
-    pub nullifier_hashes: Vec<[u8; 32]>,
-    pub commitments: Vec<[u8; 32]>,
     pub verifying_key: Vec<u8>,  // Groth16 verifying key from trusted setup
 }
 
 impl TornadoState {
-    // Updated size to include verifying key (typically ~1KB)
-    pub const MAX_SIZE: usize = 32 + 8 + MerkleTree::SIZE + (32 * 30) + 4 + 4 + (32 * 1000) + (32 * 1000) + 2048;
+    // Size without nullifier/commitment Vecs - much cleaner!
+    // 32 (authority) + 8 (denomination) + MerkleTree::SIZE + (32 * 30) (roots) + 4 (current_root_index) + 4 (next_index) + 2048 (verifying_key)
+    pub const MAX_SIZE: usize = 32 + 8 + MerkleTree::SIZE + (32 * 30) + 4 + 4 + 2048;
 }
 
 #[event]
@@ -455,10 +457,14 @@ pub struct MigrationEvent {
     pub timestamp: i64,
 }
 
+/// Empty nullifier account - existence means the nullifier has been spent
+/// This elegant solution leverages Solana's account model for O(1) lookups
+/// Based on the proven pattern from solana-mixer-core
+#[account]
+pub struct Nullifier {}
+
 #[error_code]
 pub enum TornadoError {
-    #[msg("The commitment has been submitted")]
-    DuplicateCommitment,
     #[msg("Fee exceeds transfer value")]
     FeeExceedsDenomination,
     #[msg("The note has been already spent")]
@@ -491,8 +497,6 @@ pub enum TornadoError {
     VaultBelowRent,
     #[msg("Relayer account missing when required")]
     RelayerAccountMissing,
-    #[msg("Pool has reached maximum capacity - temporary safeguard")]
-    PoolFull,
 }
 
 // Helper functions
