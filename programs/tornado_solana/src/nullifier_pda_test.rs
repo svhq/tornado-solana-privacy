@@ -31,15 +31,15 @@ mod nullifier_pda_tests {
         let program_id = crate::id();
         let nullifier_hash = [42u8; 32];
         
-        // Derive PDA address
+        // Derive PDA address with namespace prefix
         let (pda, bump) = Pubkey::find_program_address(
-            &[nullifier_hash.as_ref()],
+            &[b"nullifier", nullifier_hash.as_ref()],
             &program_id,
         );
         
         // Derive again - should be identical
         let (pda2, bump2) = Pubkey::find_program_address(
-            &[nullifier_hash.as_ref()],
+            &[b"nullifier", nullifier_hash.as_ref()],
             &program_id,
         );
         
@@ -55,12 +55,12 @@ mod nullifier_pda_tests {
         let nullifier2 = [2u8; 32];
         
         let (pda1, _) = Pubkey::find_program_address(
-            &[nullifier1.as_ref()],
+            &[b"nullifier", nullifier1.as_ref()],
             &program_id,
         );
         
         let (pda2, _) = Pubkey::find_program_address(
-            &[nullifier2.as_ref()],
+            &[b"nullifier", nullifier2.as_ref()],
             &program_id,
         );
         
@@ -121,7 +121,7 @@ mod nullifier_pda_tests {
         let program_id = crate::id();
         let start = std::time::Instant::now();
         let (_pda, _bump) = Pubkey::find_program_address(
-            &[target.as_ref()],
+            &[b"nullifier", target.as_ref()],
             &program_id,
         );
         let pda_time = start.elapsed();

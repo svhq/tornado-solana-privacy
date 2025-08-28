@@ -34,6 +34,19 @@ impl MerkleTree {
     }
     
     /// Generate zero values for empty leaves (Poseidon-based for circuit compatibility)
+    /// 
+    /// ⚠️ CRITICAL INVARIANT - DO NOT MODIFY ⚠️
+    /// This zero chain initialization is IMMUTABLE and must exactly match:
+    /// 1. The off-chain proof generation logic
+    /// 2. The circuit's Merkle tree implementation
+    /// 3. Any client-side tree construction
+    /// 
+    /// The pattern is:
+    /// - zeros[0] = Poseidon(0)
+    /// - zeros[i] = Poseidon(zeros[i-1], zeros[i-1])
+    /// 
+    /// Changing this will break ALL existing proofs and make the system incompatible
+    /// with previously generated commitments and nullifiers.
     fn generate_zeros() -> [[u8; 32]; 20] {
         let mut zeros = [[0u8; 32]; 20];
         
@@ -127,6 +140,10 @@ impl MerkleTree {
     }
     
     /// Generate merkle proof for a given leaf (siblings only)
+    /// 
+    /// NOTE: This is a simplified test helper that uses filled_subtrees and zeros.
+    /// Real proofs must be generated off-chain with complete tree data.
+    #[cfg(test)]
     pub fn get_proof(&self, leaf_index: u32) -> Vec<[u8; 32]> {
         let mut proof = Vec::new();
         let mut index = leaf_index;
@@ -149,6 +166,10 @@ impl MerkleTree {
     
     /// Generate merkle path with siblings and direction bits
     /// Returns (siblings, path_bits) where path_bits[i] = true if going right at level i
+    /// 
+    /// NOTE: This is a simplified test helper that uses filled_subtrees and zeros.
+    /// Real proofs must be generated off-chain with complete tree data.
+    #[cfg(test)]
     pub fn get_path(&self, leaf_index: u32) -> (Vec<[u8; 32]>, Vec<bool>) {
         let mut siblings = Vec::new();
         let mut path_bits = Vec::new();

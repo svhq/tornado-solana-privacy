@@ -39,7 +39,8 @@ mod verifying_key_security_test;
 #[cfg(test)]
 mod vault_pda_tests;
 
-declare_id!("11111111111111111111111111111112");
+// Program ID must match Anchor.toml for deployment
+declare_id!("ToRNaDo1111111111111111111111111111111111111");
 
 #[program]
 pub mod tornado_solana {
@@ -170,6 +171,13 @@ pub mod tornado_solana {
             &ctx.accounts.tornado_state.key(),
             vault_bump,
         )?;
+        
+        // Validate recipient is not an executable program account
+        // This prevents accidentally sending funds to program accounts where they could be locked
+        require!(
+            !ctx.accounts.recipient.executable,
+            TornadoError::BadRecipient
+        );
         
         // Nullifier is marked as spent by the PDA account creation itself
         // No need to store in Vec - the account's existence is the proof
@@ -367,7 +375,7 @@ pub struct Withdraw<'info> {
     /// Using the elegant solana-mixer pattern: existence = spent
     #[account(
         init,
-        seeds = [nullifier_hash.as_ref()],
+        seeds = [b"nullifier", nullifier_hash.as_ref()],
         bump,
         payer = payer,
         space = 8  // Just discriminator, no data needed
@@ -497,6 +505,8 @@ pub enum TornadoError {
     VaultBelowRent,
     #[msg("Relayer account missing when required")]
     RelayerAccountMissing,
+    #[msg("Recipient account cannot be an executable program")]
+    BadRecipient,
 }
 
 // Helper functions
